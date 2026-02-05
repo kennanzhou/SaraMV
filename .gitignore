@@ -33,6 +33,15 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# local config / generated output (may contain API keys or large files)
+/config/
+/logs/
+/output/
+
+# screenshots / temp images
+*.png
+!public/*.png
+
 # vercel
 .vercel
 
