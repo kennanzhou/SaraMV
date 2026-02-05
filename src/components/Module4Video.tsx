@@ -511,13 +511,14 @@ export default function Module4Video() {
                       <div
                         key={n}
                         onMouseEnter={() => setHoveredPanel(n)}
-                        onMouseLeave={() => setHoveredPanel((p) => (p === n ? null : p))}
-                        className="border border-black/30 hover:bg-[var(--accent)]/25 transition-colors flex flex-col items-center justify-center"
+                        className="relative border border-black/30 hover:bg-[var(--accent)]/25 transition-colors"
                       >
                         {expandingPanel === n ? (
-                          <span className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <span className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                          </div>
                         ) : (
-                          <span className="text-sm font-mono text-white/90 drop-shadow-md bg-black/30 px-2 py-0.5 rounded">
+                          <span className="absolute bottom-1 right-1 text-[10px] font-mono text-white/90 drop-shadow-md bg-black/40 px-1.5 py-0.5 rounded">
                             第{n}格
                           </span>
                         )}
@@ -526,48 +527,43 @@ export default function Module4Video() {
                   </div>
                 </div>
               </div>
-              {/* 悬停某格时，在该区域下方显示该格的选项：采用参考图、分辨率、辅助提示词、生图 */}
+              {/* 悬停某格后，下方固定显示该格生图选项（移开鼠标不隐藏）— 单行、无多余文字、无下拉箭头 */}
               {hoveredPanel !== null && (
-                <div className="w-[90%] max-w-4xl mx-auto mt-4 p-4 rounded-lg border border-[var(--border)] bg-[var(--background)]">
-                  <p className="text-xs text-[var(--accent)] mb-3">第 {hoveredPanel} 格 — 生图选项</p>
-                  <div className="flex flex-wrap items-end gap-4">
-                    <label className="flex items-center gap-2 cursor-pointer">
+                <div className="w-[90%] max-w-4xl mx-auto mt-4 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background-secondary)]/90 overflow-x-auto">
+                  <div className="flex flex-nowrap items-center gap-2 min-w-0">
+                    <span className="text-[20px] text-[var(--accent)] font-mono w-7 flex-shrink-0 text-center" title="当前格">{hoveredPanel}</span>
+                    <label className="flex items-center gap-1.5 flex-shrink-0 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={panelOptions[hoveredPanel]?.useRef ?? true}
                         onChange={(e) => updatePanelOption(hoveredPanel, 'useRef', e.target.checked)}
                         className="rounded border-[var(--border)]"
                       />
-                      <span className="text-sm">采用参考图</span>
+                      <span className="text-xs text-[var(--foreground-muted)]">是否选择参考图</span>
                     </label>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-[var(--foreground-muted)]">分辨率</span>
-                      <select
-                        value={panelOptions[hoveredPanel]?.resolution ?? '2K'}
-                        onChange={(e) => updatePanelOption(hoveredPanel, 'resolution', e.target.value as '2K' | '4K')}
-                        className="input-field text-sm py-1.5 w-24"
-                      >
-                        <option value="2K">2K</option>
-                        <option value="4K">4K</option>
-                      </select>
-                    </div>
-                    <div className="flex-1 min-w-[160px]">
-                      <input
-                        type="text"
-                        value={panelOptions[hoveredPanel]?.auxiliaryPrompt ?? ''}
-                        onChange={(e) => updatePanelOption(hoveredPanel, 'auxiliaryPrompt', e.target.value)}
-                        placeholder="自主输入辅助提示词（可选）"
-                        className="input-field w-full text-sm py-1.5"
-                      />
-                    </div>
+                    <select
+                      value={panelOptions[hoveredPanel]?.resolution ?? '2K'}
+                      onChange={(e) => updatePanelOption(hoveredPanel, 'resolution', e.target.value as '2K' | '4K')}
+                      title="分辨率"
+                      className="text-xs py-1 px-1.5 w-[5ch] flex-shrink-0 appearance-none bg-[var(--background-tertiary)]/60 border border-[var(--border)] rounded focus:border-[var(--accent)] focus:outline-none focus:ring-1 focus:ring-[var(--accent)]/30"
+                    >
+                      <option value="2K">2K</option>
+                      <option value="4K">4K</option>
+                    </select>
+                    <input
+                      type="text"
+                      value={panelOptions[hoveredPanel]?.auxiliaryPrompt ?? ''}
+                      onChange={(e) => updatePanelOption(hoveredPanel, 'auxiliaryPrompt', e.target.value)}
+                      placeholder="提示词"
+                      className="input-field flex-1 min-w-0 text-xs py-1 px-2 max-w-[180px]"
+                    />
                     <button
                       type="button"
                       onClick={() => handleExpandPanel(hoveredPanel)}
                       disabled={expandingPanel !== null}
-                      className="btn-primary text-sm py-2 px-4"
-                    >
-                      {expandingPanel === hoveredPanel ? '生成中...' : '生图'}
-                    </button>
+                      title="生图"
+                      className={`flex-shrink-0 w-5 h-5 rounded-full bg-red-500 border border-red-400 shadow-[0_0_0_2px_rgba(239,68,68,0.4),0_0_12px_rgba(239,68,68,0.35)] hover:shadow-[0_0_0_2px_rgba(239,68,68,0.6),0_0_16px_rgba(239,68,68,0.4)] disabled:cursor-not-allowed disabled:shadow-none transition-all ${expandingPanel === hoveredPanel ? 'opacity-70 animate-pulse' : 'disabled:opacity-50'}`}
+                    />
                   </div>
                 </div>
               )}
