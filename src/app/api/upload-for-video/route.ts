@@ -1,16 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { writeFile, mkdir } from 'fs/promises';
-import path from 'path';
-import { randomUUID } from 'crypto';
-
-const VIDEO_UPLOADS_DIR = path.join(process.cwd(), 'output', 'video_uploads');
+import { uploadImageToOss } from '@/app/lib/ossClient';
 
 /**
- * 为第五步生视频上传图片至图床（本地存储），返回可被 xAI 调用的图片 URL。
- * xAI 视频 API 需要图片的公开 URL；若应用部署在公网，返回的 URL 可被 xAI 访问；
- * 若在本地运行，xAI 无法访问 localhost，需部署或使用外部图床。
+ * 为第五步生视频上传图片至阿里云 OSS，返回公网可访问的预签名 URL（私有 bucket 也可用）。
+ * 必须在设置中配置 OSS（Region、AccessKey、Bucket）。
  * POST: { image: data URL (base64) }
- * 返回: { url: 图片访问地址, needPublicUrl?: 是否需公网地址（本地时为 true） }
+ * 返回: { url: 预签名 URL（外网可访问）, needPublicUrl: false, source: 'oss' }
  */
 export async function POST(request: NextRequest) {
   try {
@@ -23,26 +18,25 @@ export async function POST(request: NextRequest) {
     const base64Match = image.match(/^data:image\/\w+;base64,(.+)$/);
     const base64Data = base64Match ? base64Match[1] : image;
     const mimeType = image.match(/^data:(image\/\w+);base64,/)?.[1] || 'image/jpeg';
-    const ext = mimeType === 'image/png' ? 'png' : 'jpg';
 
-    await mkdir(VIDEO_UPLOADS_DIR, { recursive: true });
-    const id = randomUUID();
-    const filename = `${id}.${ext}`;
-    const filepath = path.join(VIDEO_UPLOADS_DIR, filename);
-    await writeFile(filepath, Buffer.from(base64Data, 'base64'));
+    // 1. 优先尝试上传到阿里云 OSS（返回预签名 URL，私有 bucket 也可外网访问）
+    const ossResult = await uploadImageToOss(base64Data, mimeType);
+    if (ossResult.url) {
+      const res = {
+        url: ossResult.url,
+        needPublicUrl: false,
+        source: 'oss',
+      };
+      console.log('[upload-for-video] OSS 上传成功, 返回预签名 URL');
+      return NextResponse.json(res);
+    }
 
-    const host = request.headers.get('x-forwarded-host') || request.headers.get('host');
-    const proto = request.headers.get('x-forwarded-proto') || (request.nextUrl?.protocol?.replace(/:$/, '') || 'http');
-    const origin = host ? `${proto}://${host}` : (request.nextUrl?.origin || '');
-    const baseUrl = origin || '';
-    const url = baseUrl ? `${baseUrl}/api/serve-upload?id=${id}` : `/api/serve-upload?id=${id}`;
-    const needPublicUrl = !baseUrl || baseUrl.includes('localhost');
-
-    return NextResponse.json({
-      url: url.startsWith('http') ? url : (origin ? `${origin}${url}` : url),
-      id,
-      needPublicUrl,
-    });
+    // 2. OSS 失败：返回错误，提示用户配置或检查
+    console.warn('[upload-for-video] OSS 失败:', ossResult.error);
+    return NextResponse.json(
+      { error: ossResult.error || 'OSS 上传失败，请检查设置中的 OSS 配置' },
+      { status: 400 }
+    );
   } catch (e) {
     console.error('upload-for-video error:', e);
     return NextResponse.json({ error: '上传失败' }, { status: 500 });

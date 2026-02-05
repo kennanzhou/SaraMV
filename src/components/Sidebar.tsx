@@ -41,11 +41,11 @@ export default function Sidebar() {
 
   return (
     <>
-      <aside className="fixed left-0 top-0 h-full w-16 bg-[var(--background-secondary)] border-r border-[var(--border)] flex flex-col items-center py-6 z-50">
-        {/* Logo */}
+      <aside className="fixed left-0 top-0 h-full w-16 bg-[var(--background-secondary)] border-r-2 border-[var(--accent)]/30 flex flex-col items-center py-6 z-50">
+        {/* Logo：玫瑰色渐变 + 发光，一眼能看出是新版 */}
         <div className="mb-8">
-          <div className="w-8 h-8 rounded-lg bg-[var(--accent)] flex items-center justify-center glow-accent">
-            <span className="text-[var(--background)] font-bold text-sm">S</span>
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-dim)] flex items-center justify-center shadow-[0_0_24px_var(--accent-glow)] ring-2 ring-[var(--accent)]/20">
+            <span className="text-[var(--background)] font-bold text-base">S</span>
           </div>
         </div>
 

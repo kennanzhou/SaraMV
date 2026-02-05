@@ -94,8 +94,8 @@ export default function Module4Video() {
   const [gridLoading, setGridLoading] = useState(false);
   const [expandingPanel, setExpandingPanel] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  /** 当前悬停/选中的格（1-9），用于显示该格下方的选项 */
-  const [hoveredPanel, setHoveredPanel] = useState<number | null>(null);
+  /** 当前选中的格（1-9），用于显示该格下方的选项；hover 选中后不随鼠标离开清除，需点击其它格或关闭按钮才切换 */
+  const [selectedPanel, setSelectedPanel] = useState<number | null>(null);
   /** 每格的生图选项：是否采用参考图、分辨率、辅助提示词 */
   const [panelOptions, setPanelOptions] = useState<Record<number, { useRef: boolean; resolution: '2K' | '4K'; auxiliaryPrompt: string }>>(() => {
     const o: Record<number, { useRef: boolean; resolution: '2K' | '4K'; auxiliaryPrompt: string }> = {};
@@ -492,14 +492,14 @@ export default function Module4Video() {
               )}
               {/* 九宫格接触表：图片在上，透明网格覆盖层仅做可点区域与细线，不遮挡图片 */}
               <div className="w-[90%] max-w-4xl mx-auto relative">
-                <p className="text-xs font-medium text-[var(--accent)] mb-1">九宫格（点击任意格生成该格 2K 大图，2K 图将出现在左侧栏）</p>
+                <p className="text-xs font-medium text-[var(--accent)] mb-1">九宫格（点击任意格选中，在下方选项中点击「生图」生成该格 2K 大图）</p>
                 <div className="relative w-full aspect-video rounded-lg overflow-hidden border border-[var(--border)] bg-[var(--background)]">
                   <img
                     src={contactSheetImage}
                     alt="九宫格接触表"
                     className="absolute inset-0 w-full h-full object-contain"
                   />
-                  {/* 透明 3x3 网格覆盖：悬停显示格号，点击生图需在下方选项里点「生图」 */}
+                  {/* 透明 3x3 网格覆盖：点击格选中，下方显示生图选项 */}
                   <div
                     className="absolute inset-0 grid grid-cols-3 grid-rows-3 border border-[var(--border)]"
                     style={{ backgroundColor: 'transparent' }}
@@ -510,14 +510,15 @@ export default function Module4Video() {
                     {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
                       <div
                         key={n}
-                        onMouseEnter={() => setHoveredPanel(n)}
-                        onMouseLeave={() => setHoveredPanel((p) => (p === n ? null : p))}
-                        className="border border-black/30 hover:bg-[var(--accent)]/25 transition-colors flex flex-col items-center justify-center"
+                        onMouseEnter={() => setSelectedPanel(n)}
+                        className="relative border border-black/30 hover:bg-[var(--accent)]/25 transition-colors"
                       >
                         {expandingPanel === n ? (
-                          <span className="w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <span className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                          </div>
                         ) : (
-                          <span className="text-sm font-mono text-white/90 drop-shadow-md bg-black/30 px-2 py-0.5 rounded">
+                          <span className="absolute bottom-1 right-1 text-[10px] font-mono text-white/90 drop-shadow-md bg-black/40 px-1.5 py-0.5 rounded">
                             第{n}格
                           </span>
                         )}
@@ -526,25 +527,25 @@ export default function Module4Video() {
                   </div>
                 </div>
               </div>
-              {/* 悬停某格时，在该区域下方显示该格的选项：采用参考图、分辨率、辅助提示词、生图 */}
-              {hoveredPanel !== null && (
-                <div className="w-[90%] max-w-4xl mx-auto mt-4 p-4 rounded-lg border border-[var(--border)] bg-[var(--background)]">
-                  <p className="text-xs text-[var(--accent)] mb-3">第 {hoveredPanel} 格 — 生图选项</p>
-                  <div className="flex flex-wrap items-end gap-4">
-                    <label className="flex items-center gap-2 cursor-pointer">
+              {/* 悬停某格后，下方固定显示该格生图选项（移开鼠标不隐藏）— 单行、无多余文字、无下拉箭头 */}
+              {selectedPanel !== null && (
+                <div className="w-[90%] max-w-4xl mx-auto mt-4 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background-secondary)]/90 overflow-x-auto">
+                  <div className="flex flex-nowrap items-center gap-2 min-w-0">
+                    <span className="text-[20px] text-[var(--accent)] font-mono w-7 flex-shrink-0 text-center" title="当前格">{selectedPanel}</span>
+                    <label className="flex items-center gap-1.5 flex-shrink-0 cursor-pointer">
                       <input
                         type="checkbox"
-                        checked={panelOptions[hoveredPanel]?.useRef ?? true}
-                        onChange={(e) => updatePanelOption(hoveredPanel, 'useRef', e.target.checked)}
+                        checked={panelOptions[selectedPanel]?.useRef ?? true}
+                        onChange={(e) => updatePanelOption(selectedPanel, 'useRef', e.target.checked)}
                         className="rounded border-[var(--border)]"
                       />
-                      <span className="text-sm">采用参考图</span>
+                      <span className="text-xs text-[var(--foreground-muted)]">是否选择参考图</span>
                     </label>
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-[var(--foreground-muted)]">分辨率</span>
                       <select
-                        value={panelOptions[hoveredPanel]?.resolution ?? '2K'}
-                        onChange={(e) => updatePanelOption(hoveredPanel, 'resolution', e.target.value as '2K' | '4K')}
+                        value={panelOptions[selectedPanel]?.resolution ?? '2K'}
+                        onChange={(e) => updatePanelOption(selectedPanel, 'resolution', e.target.value as '2K' | '4K')}
                         className="input-field text-sm py-1.5 w-24"
                       >
                         <option value="2K">2K</option>
@@ -554,20 +555,19 @@ export default function Module4Video() {
                     <div className="flex-1 min-w-[160px]">
                       <input
                         type="text"
-                        value={panelOptions[hoveredPanel]?.auxiliaryPrompt ?? ''}
-                        onChange={(e) => updatePanelOption(hoveredPanel, 'auxiliaryPrompt', e.target.value)}
+                        value={panelOptions[selectedPanel]?.auxiliaryPrompt ?? ''}
+                        onChange={(e) => updatePanelOption(selectedPanel, 'auxiliaryPrompt', e.target.value)}
                         placeholder="自主输入辅助提示词（可选）"
                         className="input-field w-full text-sm py-1.5"
                       />
                     </div>
                     <button
                       type="button"
-                      onClick={() => handleExpandPanel(hoveredPanel)}
+                      onClick={() => handleExpandPanel(selectedPanel)}
                       disabled={expandingPanel !== null}
-                      className="btn-primary text-sm py-2 px-4"
-                    >
-                      {expandingPanel === hoveredPanel ? '生成中...' : '生图'}
-                    </button>
+                      title="生图"
+                      className={`flex-shrink-0 w-5 h-5 rounded-full bg-red-500 border border-red-400 shadow-[0_0_0_2px_rgba(239,68,68,0.4),0_0_12px_rgba(239,68,68,0.35)] hover:shadow-[0_0_0_2px_rgba(239,68,68,0.6),0_0_16px_rgba(239,68,68,0.4)] disabled:cursor-not-allowed disabled:shadow-none transition-all ${expandingPanel === selectedPanel ? 'opacity-70 animate-pulse' : 'disabled:opacity-50'}`}
+                    />
                   </div>
                 </div>
               )}

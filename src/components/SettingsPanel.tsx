@@ -13,6 +13,11 @@ interface SettingsConfig {
   murekaApiKey: string;
   runwayApiKey: string;
   pikaApiKey: string;
+  ossRegion: string;
+  ossAccessKeyId: string;
+  ossAccessKeySecret: string;
+  ossBucket: string;
+  ossCustomDomain: string;
 }
 
 interface SettingsPanelProps {
@@ -30,6 +35,11 @@ const defaultSettings: SettingsConfig = {
   murekaApiKey: '',
   runwayApiKey: '',
   pikaApiKey: '',
+  ossRegion: '',
+  ossAccessKeyId: '',
+  ossAccessKeySecret: '',
+  ossBucket: '',
+  ossCustomDomain: '',
 };
 
 export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
@@ -114,6 +124,17 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
       description: 'xAI Grok 视频生成 API',
       items: [
         { key: 'grokApiKey' as const, label: 'Grok API Key', placeholder: '用于第五步 Grok 视频生成', required: false },
+      ],
+    },
+    {
+      title: '阿里云 OSS (第五步图片上传)',
+      description: '第五步生成视频前，需将图片上传至公网图床。配置 OSS 后，图片将上传至阿里云，返回公网 URL 供 xAI 访问',
+      items: [
+        { key: 'ossRegion' as const, label: 'OSS Region', placeholder: '如 oss-cn-hangzhou、oss-cn-shanghai', isPath: true },
+        { key: 'ossAccessKeyId' as const, label: 'OSS AccessKey ID', placeholder: '阿里云 AccessKey ID' },
+        { key: 'ossAccessKeySecret' as const, label: 'OSS AccessKey Secret', placeholder: '阿里云 AccessKey Secret' },
+        { key: 'ossBucket' as const, label: 'OSS Bucket', placeholder: '存储空间名称', isPath: true },
+        { key: 'ossCustomDomain' as const, label: '自定义域名（可选）', placeholder: '如 https://cdn.example.com，留空使用 OSS 默认域名', isPath: true },
       ],
     },
     {

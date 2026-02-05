@@ -329,11 +329,11 @@ export default function Module1Lyrics() {
     <div className="space-y-6">
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-2xl font-light mb-2">
+        <h1 className="text-2xl font-light mb-2 tracking-tight">
           <span className="text-[var(--accent)]">01</span> 歌词创作
         </h1>
         <p className="text-[var(--foreground-muted)] text-sm">
-          上传素材，让 AI 为您生成音乐创作提示词
+          上传素材，让 AI 为你生成情欲感十足的音乐提示词
         </p>
       </div>
 

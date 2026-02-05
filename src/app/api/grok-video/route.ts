@@ -5,6 +5,10 @@ import path from 'path';
 const XAI_VIDEO_BASE = 'https://api.x.ai/v1/videos';
 const MODEL = 'grok-imagine-video';
 
+// 设置超时：Vercel 免费版是 10s，Pro 是 60s，本地无限制
+// 如果你部署在 Vercel，必须在配置文件设置 maxDuration
+export const maxDuration = 60; 
+
 async function getGrokApiKey(): Promise<string> {
   try {
     const configPath = path.join(process.cwd(), 'config', 'settings.json');
@@ -16,15 +20,13 @@ async function getGrokApiKey(): Promise<string> {
   }
 }
 
-/**
- * 按 xAI 文档：先 POST 提交生成请求得到 request_id，再轮询 GET 获取视频 URL，
- * 下载视频并保存到 step3OutputBaseDir/VIDEO/ 目录。
- * POST body: { imageUrl, prompt, resolution?, duration?, aspectRatio?, step3OutputBaseDir? }
- * 参考：https://docs.x.ai/docs/guides/video-generation
- */
+// 封装一个异步等待函数，防止阻塞栈
+const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
+    console.log("111111111111111111111111111111", body)
     const {
       imageUrl,
       prompt,
@@ -34,22 +36,17 @@ export async function POST(request: NextRequest) {
       step3OutputBaseDir,
     } = body;
 
-    if (!imageUrl || typeof imageUrl !== 'string' || !prompt || typeof prompt !== 'string') {
-      return NextResponse.json(
-        { error: 'Missing imageUrl or prompt' },
-        { status: 400 }
-      );
+    // 1. 参数校验
+    if (!imageUrl || !prompt) {
+      return NextResponse.json({ error: 'Missing imageUrl or prompt' }, { status: 400 });
     }
 
     const apiKey = await getGrokApiKey();
     if (!apiKey) {
-      return NextResponse.json(
-        { error: '请先在设置中配置 Grok API Key' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: '请先配置 Grok API Key' }, { status: 400 });
     }
 
-    // 1) POST 提交视频生成请求（从图片 + 提示词）
+    // 2. 提交生成任务
     const createRes = await fetch(`${XAI_VIDEO_BASE}/generations`, {
       method: 'POST',
       headers: {
@@ -60,100 +57,78 @@ export async function POST(request: NextRequest) {
         prompt,
         model: MODEL,
         image: { url: imageUrl },
-        duration: Math.min(15, Math.max(1, Number(duration) || 10)),
+        duration: Math.min(15, Math.max(1, Number(duration))),
         aspect_ratio: aspectRatio,
-        resolution: resolution === '1080p' ? '720p' : '720p', // 文档仅支持 720p、480p
+        resolution: '720p',
       }),
     });
 
+    console.log("2222222222222222222222222222222222", createRes)
+
     if (!createRes.ok) {
       const errText = await createRes.text();
-      let errMsg = '视频生成请求失败';
-      try {
-        const errJson = JSON.parse(errText);
-        errMsg = errJson.error?.message || errJson.message || errText.slice(0, 200);
-      } catch {
-        errMsg = errText.slice(0, 300);
+      return NextResponse.json({ error: `提交失败: ${errText}` }, { status: createRes.status });
+    }
+
+    const { request_id: requestId } = await createRes.json();
+
+    console.log("333333333333333333333333333333", requestId)
+    // 3. 后端内部轮询 (注意：这里必须小心处理超时)
+    let videoUrl = '';
+    const startTime = Date.now();
+    const TIMEOUT_LIMIT = 55000; // 55秒超时保护（适配 Vercel Pro）
+
+    while (!videoUrl) {
+      // 检查总耗时，防止 API 永远不返回导致服务器挂掉
+      if (Date.now() - startTime > TIMEOUT_LIMIT) {
+        return NextResponse.json({ 
+            error: '任务处理时间过长，请稍后检查', 
+            requestId 
+        }, { status: 202 }); 
       }
-      return NextResponse.json({ error: errMsg }, { status: createRes.status });
-    }
 
-    const createData = await createRes.json();
-    const requestId = createData.request_id ?? createData.requestId;
-    if (!requestId) {
-      return NextResponse.json(
-        { error: 'API 未返回 request_id' },
-        { status: 502 }
-      );
-    }
+      await delay(5000); // 每次等 5 秒
 
-    // 2) 轮询获取视频结果
-    const maxAttempts = 120; // 约 10 分钟
-    const pollIntervalMs = 5000;
-    let videoUrl: string | null = null;
-
-    for (let i = 0; i < maxAttempts; i++) {
-      await new Promise((r) => setTimeout(r, pollIntervalMs));
-
-      const getRes = await fetch(`${XAI_VIDEO_BASE}/${requestId}`, {
+      const pollRes = await fetch(`${XAI_VIDEO_BASE}/${requestId}`, {
         headers: { Authorization: `Bearer ${apiKey}` },
       });
+      
+      console.log("44444444444444444444444444444444", pollRes)
 
-      if (!getRes.ok) {
-        const errText = await getRes.text();
-        console.warn('grok-video poll error:', getRes.status, errText);
-        continue;
-      }
+      if (!pollRes.ok) continue;
 
-      const getData = await getRes.json();
-      videoUrl = getData.url ?? getData.video_url ?? null;
-      if (videoUrl) break;
+      const pollData = await pollRes.json();
+      videoUrl = pollData.url || pollData.video_url || pollData.video?.url || '';
 
-      const status = getData.status ?? getData.state;
+      console.log("555555555555555555555555555", pollData)
+      console.log("666666666666666666666666666", videoUrl)
+      const status = pollData.status || pollData.state;
       if (status === 'failed' || status === 'error') {
-        const errMsg = getData.error?.message ?? getData.message ?? '生成失败';
-        return NextResponse.json({ error: errMsg }, { status: 502 });
+        return NextResponse.json({ error: 'Grok 生成视频失败' }, { status: 502 });
       }
     }
 
-    if (!videoUrl) {
-      return NextResponse.json(
-        { error: '视频生成超时，请稍后在 xAI 控制台查看' },
-        { status: 504 }
-      );
-    }
-
-    // 3) 下载视频并保存到 step3OutputBaseDir/VIDEO/
-    let savedPath: string | undefined;
-    try {
-      const videoRes = await fetch(videoUrl);
-      if (!videoRes.ok) throw new Error('下载视频失败');
-      const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
-
-      if (step3OutputBaseDir && typeof step3OutputBaseDir === 'string' && step3OutputBaseDir.trim()) {
-        const baseDir = path.resolve(process.cwd(), step3OutputBaseDir.trim());
-        const videoDir = path.join(baseDir, 'VIDEO');
+    // 4. 下载并保存
+    let savedPath = '';
+    if (step3OutputBaseDir) {
+      try {
+        const videoRes = await fetch(videoUrl);
+        const buffer = Buffer.from(await videoRes.arrayBuffer());
+        const videoDir = path.resolve(process.cwd(), step3OutputBaseDir, 'VIDEO');
         await mkdir(videoDir, { recursive: true });
-        const timestamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
-        const filename = `video_${timestamp}.mp4`;
+        const filename = `video_${Date.now()}.mp4`;
         const filepath = path.join(videoDir, filename);
-        await writeFile(filepath, videoBuffer);
+        await writeFile(filepath, buffer);
         savedPath = path.relative(process.cwd(), filepath);
+      } catch (e) {
+        console.error('Save failed:', e);
       }
-    } catch (saveErr) {
-      console.warn('grok-video save failed:', saveErr);
-      // 保存失败仍返回视频 URL
     }
 
-    return NextResponse.json({
-      videoUrl,
-      savedPath,
-    });
-  } catch (e) {
-    console.error('grok-video error:', e);
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : '视频生成失败' },
-      { status: 500 }
-    );
+    return NextResponse.json({ videoUrl, savedPath });
+
+  } catch (e: any) {
+    console.error('Main error:', e);
+    return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }

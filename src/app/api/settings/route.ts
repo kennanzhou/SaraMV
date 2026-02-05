@@ -16,6 +16,12 @@ const defaultSettings = {
   murekaApiKey: '',
   runwayApiKey: '',
   pikaApiKey: '',
+  // 阿里云 OSS（第五步视频生成图片上传）
+  ossRegion: '',
+  ossAccessKeyId: '',
+  ossAccessKeySecret: '',
+  ossBucket: '',
+  ossCustomDomain: '', // 可选：自定义域名，留空则使用 OSS 默认域名
 };
 
 // GET - 读取设置
@@ -27,7 +33,7 @@ export async function GET() {
     // 对 API Key 进行脱敏处理（只返回前4位和后4位）
     const maskedSettings: Record<string, string> = {};
     for (const [key, value] of Object.entries(settings)) {
-      if (key.includes('ApiKey') && typeof value === 'string' && value.length > 8) {
+      if ((key.includes('ApiKey') || key.includes('AccessKey') || key.endsWith('Secret')) && typeof value === 'string' && value.length > 8) {
         maskedSettings[key] = value.slice(0, 4) + '****' + value.slice(-4);
       } else {
         maskedSettings[key] = value as string;
@@ -62,7 +68,7 @@ export async function POST(request: NextRequest) {
     const mergedSettings: Record<string, string> = {};
     for (const [key, value] of Object.entries(newSettings)) {
       const strValue = value as string;
-      if (key.includes('ApiKey') && strValue.includes('****')) {
+      if ((key.includes('ApiKey') || key.includes('AccessKey') || key.endsWith('Secret')) && strValue.includes('****')) {
         // 脱敏值，保留原始值
         mergedSettings[key] = existingSettings[key as keyof typeof existingSettings] || '';
       } else {
@@ -86,6 +92,13 @@ SUNO_API_KEY=${mergedSettings.sunoApiKey || ''}
 MUREKA_API_KEY=${mergedSettings.murekaApiKey || ''}
 RUNWAY_API_KEY=${mergedSettings.runwayApiKey || ''}
 PIKA_API_KEY=${mergedSettings.pikaApiKey || ''}
+
+# 阿里云 OSS
+OSS_REGION=${mergedSettings.ossRegion || ''}
+OSS_ACCESS_KEY_ID=${mergedSettings.ossAccessKeyId || ''}
+OSS_ACCESS_KEY_SECRET=${mergedSettings.ossAccessKeySecret || ''}
+OSS_BUCKET=${mergedSettings.ossBucket || ''}
+OSS_CUSTOM_DOMAIN=${mergedSettings.ossCustomDomain || ''}
 `;
     
     await writeFile(path.join(process.cwd(), '.env.local'), envContent, 'utf8');

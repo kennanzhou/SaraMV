@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { mkdir, writeFile } from 'fs/promises';
 import path from 'path';
-import { generateContactSheetImage, getLastGridContactSheetError } from '@/app/lib/gridImageGen';
+import { generateContactSheetImage, getLastGridContactSheetError, type EthnicityOption } from '@/app/lib/gridImageGen';
 import { getPromptsConfig } from '@/app/lib/promptsConfig';
+
+const VALID_ETHNICITY: EthnicityOption[] = ['亚洲女性', '欧美女性', '亚洲男性', '欧美男性'];
+
+function isValidEthnicity(v: string): v is EthnicityOption {
+  return VALID_ETHNICITY.includes(v as EthnicityOption);
+}
 
 const GRID_OUTPUT_DIR = path.join(process.cwd(), 'output', 'grid');
 
@@ -42,7 +48,7 @@ export async function POST(request: NextRequest) {
           ? { gridCloseupPrompt: promptsConfig.gridCloseupPrompt }
           : {}),
       },
-      characterReferenceImage && ethnicity
+      characterReferenceImage && ethnicity && isValidEthnicity(ethnicity)
         ? { characterReferenceImage, ethnicity }
         : undefined
     );

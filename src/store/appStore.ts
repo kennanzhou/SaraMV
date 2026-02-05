@@ -183,11 +183,12 @@ export const useAppStore = create<AppState>((set) => ({
   addStep4Panel2K: (sourceId, contactImageUrl, panelIndex, imageUrl) => set((state) => {
     const groups = state.step4Groups.map((g) => {
       if (g.sourceId !== sourceId) return g;
-      const sheets = g.sheets.map((s) =>
-        s.contactImageUrl === contactImageUrl
-          ? { ...s, panel2KOrdered: [...s.panel2KOrdered, { panelIndex, imageUrl }] }
-          : s
-      );
+      const sheets = g.sheets.map((s) => {
+        if (s.contactImageUrl !== contactImageUrl) return s;
+        // 同格只保留一条：先去掉同 panelIndex 的旧项，再追加当前
+        const withoutSamePanel = s.panel2KOrdered.filter((p) => p.panelIndex !== panelIndex);
+        return { ...s, panel2KOrdered: [...withoutSamePanel, { panelIndex, imageUrl }] };
+      });
       return { ...g, sheets };
     });
     return { step4Groups: groups };

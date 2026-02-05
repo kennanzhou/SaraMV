@@ -36,13 +36,16 @@ export default function Module5Video() {
   const ethnicityPrefix = ETHNICITY_PREFIX[ethnicityOption] ?? ETHNICITY_PREFIX['亚洲女性'];
   const fullPrompt = selectedImage ? `${ethnicityPrefix} ${promptSuffix}`.trim() : '';
 
-  /** 左侧列表：按 step4Groups 顺序，每组为场景图 + 其下所有 2K 图（按生成顺序） */
+  /** 左侧列表：按 step4Groups 顺序，每组为场景图 + 其下所有 2K 图（按生成顺序），同一 URL 只显示一次 */
   const leftListItems = useMemo(() => {
     const items: Array<{ type: 'scene'; url: string; label: string; groupLabel: string } | { type: '2k'; url: string; label: string; groupLabel: string }> = [];
+    const seenUrls = new Set<string>();
     step4Groups.forEach((g) => {
       items.push({ type: 'scene', url: g.sourceImageUrl, label: g.sourceLabel, groupLabel: g.sourceLabel });
       g.sheets.forEach((s, sheetIdx) => {
         s.panel2KOrdered.forEach((p, idx) => {
+          if (seenUrls.has(p.imageUrl)) return;
+          seenUrls.add(p.imageUrl);
           items.push({
             type: '2k',
             url: p.imageUrl,
