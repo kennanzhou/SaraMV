@@ -47,6 +47,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Load settings on mount
   useEffect(() => {
@@ -70,6 +71,7 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
   const handleSave = async () => {
     setIsSaving(true);
     setSaveStatus('idle');
+    setSaveError(null);
     
     try {
       const response = await fetch('/api/settings', {
@@ -78,15 +80,19 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
         body: JSON.stringify(settings),
       });
       
+      const data = await response.json().catch(() => ({}));
+      
       if (response.ok) {
         setSaveStatus('success');
         setTimeout(() => setSaveStatus('idle'), 2000);
       } else {
         setSaveStatus('error');
+        setSaveError(typeof data?.error === 'string' ? data.error : '保存失败，请重试');
       }
     } catch (error) {
       console.error('Failed to save settings:', error);
       setSaveStatus('error');
+      setSaveError(error instanceof Error ? error.message : '网络错误，请检查控制台');
     } finally {
       setIsSaving(false);
     }
@@ -236,6 +242,9 @@ export default function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
 
         {/* Footer */}
         <div className="p-6 border-t border-[var(--border)] bg-[var(--background)]">
+          {saveError && (
+            <p className="text-sm text-[var(--error)] mb-3">{saveError}</p>
+          )}
           <button
             onClick={handleSave}
             disabled={isSaving}

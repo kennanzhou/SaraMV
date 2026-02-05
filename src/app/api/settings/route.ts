@@ -50,11 +50,14 @@ export async function GET() {
 // POST - 保存设置
 export async function POST(request: NextRequest) {
   try {
-    const newSettings = await request.json();
-    
+    const newSettings = await request.json().catch(() => ({}));
+    if (typeof newSettings !== 'object' || newSettings === null) {
+      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+    }
+
     // 确保配置目录存在
     await mkdir(CONFIG_DIR, { recursive: true });
-    
+
     // 读取现有设置
     let existingSettings = { ...defaultSettings };
     try {
@@ -63,11 +66,11 @@ export async function POST(request: NextRequest) {
     } catch {
       // 文件不存在，使用默认设置
     }
-    
-    // 合并设置（如果新值是脱敏的，保留原值）
-    const mergedSettings: Record<string, string> = {};
+
+    // 合并设置（如果新值是脱敏的，保留原值）；以 defaultSettings 为基础，确保所有 key 都存在
+    const mergedSettings: Record<string, string> = { ...defaultSettings };
     for (const [key, value] of Object.entries(newSettings)) {
-      const strValue = value as string;
+      const strValue = typeof value === 'string' ? value : '';
       if ((key.includes('ApiKey') || key.includes('AccessKey') || key.endsWith('Secret')) && strValue.includes('****')) {
         // 脱敏值，保留原始值
         mergedSettings[key] = existingSettings[key as keyof typeof existingSettings] || '';
@@ -105,9 +108,10 @@ OSS_CUSTOM_DOMAIN=${mergedSettings.ossCustomDomain || ''}
     
     return NextResponse.json({ success: true });
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
     console.error('Failed to save settings:', error);
     return NextResponse.json(
-      { error: 'Failed to save settings' },
+      { error: `保存失败: ${msg}` },
       { status: 500 }
     );
   }
