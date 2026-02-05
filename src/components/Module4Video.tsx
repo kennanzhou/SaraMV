@@ -517,7 +517,11 @@ export default function Module4Video() {
                           <div className="absolute inset-0 flex items-center justify-center">
                             <span className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
                           </div>
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <span className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                          </div>
                         ) : (
+                          <span className="absolute bottom-1 right-1 text-[10px] font-mono text-white/90 drop-shadow-md bg-black/40 px-1.5 py-0.5 rounded">
                           <span className="absolute bottom-1 right-1 text-[10px] font-mono text-white/90 drop-shadow-md bg-black/40 px-1.5 py-0.5 rounded">
                             第{n}格
                           </span>
@@ -539,6 +543,7 @@ export default function Module4Video() {
                         onChange={(e) => updatePanelOption(selectedPanel, 'useRef', e.target.checked)}
                         className="rounded border-[var(--border)]"
                       />
+                      <span className="text-xs text-[var(--foreground-muted)]">是否选择参考图</span>
                       <span className="text-xs text-[var(--foreground-muted)]">是否选择参考图</span>
                     </label>
                     <div className="flex items-center gap-2">
