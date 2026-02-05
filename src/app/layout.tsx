@@ -34,8 +34,8 @@ export default function RootLayout({
         {/* Sidebar Navigation */}
         <Sidebar />
         
-        {/* Main Content */}
-        <main className="ml-16 min-h-screen relative z-10">
+        {/* Main Content：留白与呼吸感 */}
+        <main className="ml-16 min-h-screen relative z-10 pl-2">
           {children}
         </main>
       </body>

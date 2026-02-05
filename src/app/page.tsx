@@ -28,7 +28,7 @@ export default function Home() {
   };
 
   return (
-    <div className="p-8 max-w-7xl mx-auto">
+    <div className="py-10 px-8 max-w-6xl mx-auto">
       {renderModule()}
     </div>
   );
