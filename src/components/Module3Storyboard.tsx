@@ -67,6 +67,8 @@ export default function Module3Storyboard() {
     unlockModule,
     promptVersions,
     finalSelectedVersion,
+    studioSceneImage,
+    setStudioSceneImage,
   } = useAppStore(
     useShallow((s) => ({
       uploadedImage: s.uploadedImage,
@@ -88,6 +90,8 @@ export default function Module3Storyboard() {
       unlockModule: s.unlockModule,
       promptVersions: s.promptVersions,
       finalSelectedVersion: s.finalSelectedVersion,
+      studioSceneImage: s.studioSceneImage,
+      setStudioSceneImage: s.setStudioSceneImage,
     }))
   );
 
@@ -159,7 +163,7 @@ export default function Module3Storyboard() {
   const [studioMode, setStudioMode] = useState<1 | 2 | 3>(1);
   const [studioUserScene, setStudioUserScene] = useState('');
   const [studioSceneLoading, setStudioSceneLoading] = useState(false);
-  const [studioSceneImage, setStudioSceneImage] = useState<string | null>(null);
+  // studioSceneImage 已迁移到 store 中，此处不再使用 useState
 
   const keywordId = selectedKeyword?.id ?? '';
   const coreWord = (imageContext || '').trim().slice(0, 30) || 'scene';

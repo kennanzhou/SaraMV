@@ -4,6 +4,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { readFile } from 'fs/promises';
 import path from 'path';
+import { parseDataUrl, isValidBase64 } from './dataUrlUtils';
 
 async function getApiKey(): Promise<string> {
   try {
@@ -38,9 +39,12 @@ export async function generateSceneImage(
     return null;
   }
 
-  const base64Match = referenceImageDataUrl.match(/^data:image\/\w+;base64,(.+)$/);
-  const base64Data = base64Match ? base64Match[1] : referenceImageDataUrl;
-  const mimeType = referenceImageDataUrl.match(/^data:(image\/\w+);base64,/)?.[1] || 'image/jpeg';
+  const { data: base64Data, mimeType } = parseDataUrl(referenceImageDataUrl);
+  if (!isValidBase64(base64Data)) {
+    lastSceneImageError = '参考图片数据无效，请重新上传';
+    return null;
+  }
+  console.log(`[scene] 参考图 base64 长度: ${base64Data.length} (≈${Math.round(base64Data.length * 0.75 / 1024)}KB), mime: ${mimeType}`);
 
   const fullPrompt =
     `你是一位日本人像/场景摄影师，请根据以下提示词与参考图生成一张 16:9 的电影感场景图。\n\n` +
@@ -52,29 +56,29 @@ export async function generateSceneImage(
     `请输出一张 16:9 的横图，保持电影感与风格统一。`;
 
   const ai = new GoogleGenAI({ apiKey });
-  const modelIds = ['gemini-2.5-flash-image', 'gemini-3-pro-image-preview'];
+  const modelIds = ['gemini-3-pro-image-preview', 'gemini-2.5-flash-image'];
   let lastError: unknown;
+  let got400 = false;
+
+  const contents: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
+    { text: fullPrompt },
+    { inlineData: { mimeType, data: base64Data } },
+  ];
 
   for (const modelId of modelIds) {
     try {
+      console.log(`[scene] 尝试模型: ${modelId}`);
       const response = await ai.models.generateContent({
         model: modelId,
-        contents: [
-          { text: fullPrompt },
-          { inlineData: { mimeType, data: base64Data } },
-        ],
+        contents,
         config: {
           responseModalities: ['TEXT', 'IMAGE'] as string[],
-          imageConfig: {
-            aspectRatio: '16:9',
-            imageSize: '2K',
-          },
+          imageConfig: { aspectRatio: '16:9' },
         },
       });
 
       const parts = response.candidates?.[0]?.content?.parts;
       if (Array.isArray(parts)) {
-        // 取最后一个含图片的 part（模型可能先返回文字再返回图）
         let lastImage: { mime: string; data: string } | null = null;
         for (const part of parts) {
           const blob = (part as { inlineData?: { mimeType?: string; data?: string } })?.inlineData;
@@ -82,79 +86,79 @@ export async function generateSceneImage(
         }
         if (lastImage) return `data:${lastImage.mime};base64,${lastImage.data}`;
       }
-      // 无候选或无图时检查是否被内容策略拦截
       const feedback = (response as { promptFeedback?: { blockReason?: string } })?.promptFeedback;
       if (feedback?.blockReason) {
-        console.warn(`Scene image blocked (${modelId}):`, feedback.blockReason);
+        console.warn(`[scene] 内容被过滤 (${modelId}):`, feedback.blockReason);
         lastError = new Error(`内容被过滤: ${feedback.blockReason}`);
       } else if (!lastError) {
         lastError = new Error('API 未返回图片，可能被限流或内容策略拦截');
       }
     } catch (e) {
       lastError = e;
-      console.warn(`Scene image with model ${modelId} failed:`, e);
+      console.warn(`[scene] 模型 ${modelId} 失败:`, e instanceof Error ? e.message : e);
+      if (e instanceof Error && (e.message.includes('INVALID_ARGUMENT') || e.message.includes('400'))) {
+        got400 = true;
+        break;
+      }
       continue;
     }
   }
 
-  // 可能是速率限制：先等 3 秒重试一次
-  await new Promise((r) => setTimeout(r, 3000));
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents: [
-        { text: fullPrompt },
-        { inlineData: { mimeType, data: base64Data } },
-      ],
-      config: {
-        responseModalities: ['TEXT', 'IMAGE'] as string[],
-        imageConfig: { aspectRatio: '16:9', imageSize: '2K' },
-      },
-    });
-    const parts = response.candidates?.[0]?.content?.parts;
-    if (Array.isArray(parts)) {
-      let lastImage: { mime: string; data: string } | null = null;
-      for (const part of parts) {
-        const blob = (part as { inlineData?: { mimeType?: string; data?: string } })?.inlineData;
-        if (blob?.data) lastImage = { mime: blob.mimeType || 'image/png', data: blob.data };
+  // 400 错误不重试（参数问题，重试无意义）
+  if (!got400) {
+    // 可能是速率限制：等 3 秒重试
+    await new Promise((r) => setTimeout(r, 3000));
+    try {
+      const response = await ai.models.generateContent({
+        model: modelIds[0],
+        contents,
+        config: {
+          responseModalities: ['TEXT', 'IMAGE'] as string[],
+          imageConfig: { aspectRatio: '16:9' },
+        },
+      });
+      const parts = response.candidates?.[0]?.content?.parts;
+      if (Array.isArray(parts)) {
+        let lastImage: { mime: string; data: string } | null = null;
+        for (const part of parts) {
+          const blob = (part as { inlineData?: { mimeType?: string; data?: string } })?.inlineData;
+          if (blob?.data) lastImage = { mime: blob.mimeType || 'image/png', data: blob.data };
+        }
+        if (lastImage) return `data:${lastImage.mime};base64,${lastImage.data}`;
       }
-      if (lastImage) return `data:${lastImage.mime};base64,${lastImage.data}`;
+    } catch (retryErr) {
+      console.warn('[scene] 3s 后重试失败:', retryErr instanceof Error ? retryErr.message : retryErr);
     }
-    const feedback = (response as { promptFeedback?: { blockReason?: string } })?.promptFeedback;
-    if (feedback?.blockReason) lastError = new Error(`内容被过滤: ${feedback.blockReason}`);
-  } catch (retryErr) {
-    console.warn('Scene image retry failed:', retryErr);
-  }
 
-  // 仍失败则再等 30 秒重试一次（应对严格限流）
-  await new Promise((r) => setTimeout(r, 30000));
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents: [
-        { text: fullPrompt },
-        { inlineData: { mimeType, data: base64Data } },
-      ],
-      config: {
-        responseModalities: ['TEXT', 'IMAGE'] as string[],
-        imageConfig: { aspectRatio: '16:9', imageSize: '2K' },
-      },
-    });
-    const parts = response.candidates?.[0]?.content?.parts;
-    if (Array.isArray(parts)) {
-      let lastImage: { mime: string; data: string } | null = null;
-      for (const part of parts) {
-        const blob = (part as { inlineData?: { mimeType?: string; data?: string } })?.inlineData;
-        if (blob?.data) lastImage = { mime: blob.mimeType || 'image/png', data: blob.data };
+    // 再等 15 秒重试
+    await new Promise((r) => setTimeout(r, 15000));
+    try {
+      const response = await ai.models.generateContent({
+        model: modelIds[0],
+        contents,
+        config: {
+          responseModalities: ['TEXT', 'IMAGE'] as string[],
+          imageConfig: { aspectRatio: '16:9' },
+        },
+      });
+      const parts = response.candidates?.[0]?.content?.parts;
+      if (Array.isArray(parts)) {
+        let lastImage: { mime: string; data: string } | null = null;
+        for (const part of parts) {
+          const blob = (part as { inlineData?: { mimeType?: string; data?: string } })?.inlineData;
+          if (blob?.data) lastImage = { mime: blob.mimeType || 'image/png', data: blob.data };
+        }
+        if (lastImage) return `data:${lastImage.mime};base64,${lastImage.data}`;
       }
-      if (lastImage) return `data:${lastImage.mime};base64,${lastImage.data}`;
+    } catch (retry2Err) {
+      console.warn('[scene] 15s 后重试失败:', retry2Err instanceof Error ? retry2Err.message : retry2Err);
     }
-  } catch (retry2Err) {
-    console.warn('Scene image retry2 failed:', retry2Err);
   }
 
   const errMsg = lastError instanceof Error ? lastError.message : String(lastError);
-  lastSceneImageError = errMsg;
-  console.error('Scene image generation failed:', lastError);
+  lastSceneImageError = got400
+    ? '参考图格式或尺寸不被 API 接受，请尝试压缩图片或使用 JPEG/PNG 后重试'
+    : errMsg;
+  console.error('[scene] 场景图生成最终失败:', lastError);
   return null;
 }

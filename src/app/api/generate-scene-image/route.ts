@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { mkdir, writeFile } from 'fs/promises';
 import path from 'path';
 import { generateSceneImage, getLastSceneImageError } from '@/app/lib/sceneImageGen';
+import { parseDataUrl } from '@/app/lib/dataUrlUtils';
 
 const SCENE_OUTPUT_BASE = path.join(process.cwd(), 'output', 'scene');
 
@@ -48,10 +49,10 @@ export async function POST(request: NextRequest) {
       const baseName = givenFilename && /^[\w.-]+$/.test(givenFilename)
         ? givenFilename.replace(/\.(png|jpg|jpeg)$/i, '')
         : `scene_${Date.now()}`;
-      const ext = imageDataUrl.startsWith('data:image/png') ? 'png' : 'jpg';
+      const { data: base64, mimeType: saveMime } = parseDataUrl(imageDataUrl);
+      const ext = saveMime === 'image/png' ? 'png' : 'jpg';
       const filename = `${baseName}.${ext}`;
       const filepath = path.join(absDir, filename);
-      const base64 = imageDataUrl.replace(/^data:image\/\w+;base64,/, '');
       await writeFile(filepath, Buffer.from(base64, 'base64'));
       savedPath = path.relative(process.cwd(), filepath);
     }

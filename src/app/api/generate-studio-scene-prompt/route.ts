@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { NextRequest, NextResponse } from 'next/server';
 import { readFile } from 'fs/promises';
 import path from 'path';
+import { parseDataUrl } from '@/app/lib/dataUrlUtils';
 
 async function getApiKey(): Promise<string> {
   try {
@@ -40,8 +41,7 @@ export async function POST(request: NextRequest) {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
-    const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
-    const mimeType = image.match(/^data:(image\/\w+);base64,/)?.[1] || 'image/jpeg';
+    const { data: base64Data, mimeType } = parseDataUrl(image);
 
     let instruction = '';
     if (m === 1) {

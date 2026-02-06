@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'fs/promises';
 import path from 'path';
 import { generateContactSheetImage, getLastGridContactSheetError, type EthnicityOption } from '@/app/lib/gridImageGen';
 import { getPromptsConfig } from '@/app/lib/promptsConfig';
+import { parseDataUrl } from '@/app/lib/dataUrlUtils';
 
 const VALID_ETHNICITY: EthnicityOption[] = ['亚洲女性', '欧美女性', '亚洲男性', '欧美男性'];
 
@@ -60,9 +61,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const match = imageUrl.match(/^data:image\/\w+;base64,(.+)$/);
-    const base64 = match ? match[1] : imageUrl;
-    const ext = imageUrl.startsWith('data:image/png') ? 'png' : 'jpg';
+    const { data: base64, mimeType: gridMime } = parseDataUrl(imageUrl);
+    const ext = gridMime === 'image/png' ? 'png' : 'jpg';
     const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
 
     let saveDir: string;

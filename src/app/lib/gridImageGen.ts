@@ -5,6 +5,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { readFile } from 'fs/promises';
 import path from 'path';
+import { parseDataUrl, isValidBase64 } from './dataUrlUtils';
 
 async function getApiKey(): Promise<string> {
   try {
@@ -51,6 +52,42 @@ export function getLastGridContactSheetError(): string | null {
   return lastGridContactSheetError;
 }
 
+/** 判断错误是否为 400 INVALID_ARGUMENT（不应重试） */
+function is400Error(e: unknown): boolean {
+  if (!e) return false;
+  const msg = e instanceof Error ? e.message : String(e);
+  return msg.includes('INVALID_ARGUMENT') || msg.includes('400');
+}
+
+/** 单次调用 Gemini 生成图片，返回 data URL 或 null */
+async function callGeminiImage(
+  ai: InstanceType<typeof GoogleGenAI>,
+  modelId: string,
+  contents: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }>,
+  aspectRatio: string,
+): Promise<string | null> {
+  const response = await ai.models.generateContent({
+    model: modelId,
+    contents,
+    config: {
+      responseModalities: ['TEXT', 'IMAGE'] as string[],
+      imageConfig: { aspectRatio },
+    },
+  });
+  const parts = response.candidates?.[0]?.content?.parts;
+  if (Array.isArray(parts)) {
+    let lastImage: { mime: string; data: string } | null = null;
+    for (const part of parts) {
+      const blob = (part as { inlineData?: { mimeType?: string; data?: string } })?.inlineData;
+      if (blob?.data) lastImage = { mime: blob.mimeType || 'image/png', data: blob.data };
+    }
+    if (lastImage) return `data:${lastImage.mime};base64,${lastImage.data}`;
+  }
+  const feedback = (response as { promptFeedback?: { blockReason?: string } })?.promptFeedback;
+  if (feedback?.blockReason) throw new Error(`内容被过滤: ${feedback.blockReason}`);
+  return null;
+}
+
 export async function generateContactSheetImage(
   sourceImageDataUrl: string,
   overrides?: GridPromptOverrides,
@@ -63,9 +100,13 @@ export async function generateContactSheetImage(
     return null;
   }
 
-  const base64Match = sourceImageDataUrl.match(/^data:image\/\w+;base64,(.+)$/);
-  const base64Data = base64Match ? base64Match[1] : sourceImageDataUrl;
-  const mimeType = sourceImageDataUrl.match(/^data:(image\/\w+);base64,/)?.[1] || 'image/jpeg';
+  const { data: base64Data, mimeType } = parseDataUrl(sourceImageDataUrl);
+  if (!isValidBase64(base64Data)) {
+    lastGridContactSheetError = '源图片数据无效，请重新上传或使用其它图片';
+    console.error('[grid] 源图 base64 无效, 长度:', base64Data.length, '前20字符:', base64Data.slice(0, 20));
+    return null;
+  }
+  console.log(`[grid] 源图 base64 长度: ${base64Data.length} (≈${Math.round(base64Data.length * 0.75 / 1024)}KB), mime: ${mimeType}`);
 
   const closeupPrompt = overrides?.gridCloseupPrompt?.trim();
   const intro = overrides?.gridContactSheetPrompt ?? null;
@@ -94,110 +135,92 @@ export async function generateContactSheetImage(
     prompt += `\n\n重要：人物为【${options.ethnicity}】，严格按照参考图人物的所有面部特征（五官、脸型、肤色等）一致。`;
   }
 
+  // 构造 contents：文本 + 源图 + 可选参考图
+  const hasRef = !!options?.characterReferenceImage;
   const contents: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
     { text: prompt },
     { inlineData: { mimeType, data: base64Data } },
   ];
-  if (options?.characterReferenceImage) {
-    const refMatch = options.characterReferenceImage.match(/^data:image\/\w+;base64,(.+)$/);
-    const refData = refMatch ? refMatch[1] : options.characterReferenceImage;
-    const refMime = options.characterReferenceImage.match(/^data:(image\/\w+);base64,/)?.[1] || 'image/jpeg';
-    contents.push({ inlineData: { mimeType: refMime, data: refData } });
+  let refData = '';
+  let refMime = 'image/jpeg';
+  if (hasRef) {
+    const parsed = parseDataUrl(options!.characterReferenceImage!);
+    refData = parsed.data;
+    refMime = parsed.mimeType;
+    if (isValidBase64(refData)) {
+      contents.push({ inlineData: { mimeType: refMime, data: refData } });
+      console.log(`[grid] 参考图 base64 长度: ${refData.length} (≈${Math.round(refData.length * 0.75 / 1024)}KB), mime: ${refMime}`);
+    } else {
+      console.warn('[grid] 参考图 base64 无效，跳过参考图');
+    }
   }
 
+  // 不带参考图的 contents（400 fallback 时使用）
+  const contentsNoRef: typeof contents = [
+    { text: prompt },
+    { inlineData: { mimeType, data: base64Data } },
+  ];
+
   const ai = new GoogleGenAI({ apiKey });
-  const modelIds = ['gemini-2.5-flash-image', 'gemini-3-pro-image-preview'];
+  const modelIds = ['gemini-3-pro-image-preview', 'gemini-2.5-flash-image'];
   let lastError: unknown;
+  let got400 = false;
 
   for (const modelId of modelIds) {
     try {
-      const response = await ai.models.generateContent({
-        model: modelId,
-        contents,
-        config: {
-          responseModalities: ['TEXT', 'IMAGE'] as string[],
-          imageConfig: {
-            aspectRatio: '16:9',
-            imageSize: '1K',
-          },
-        },
-      });
-
-      const parts = response.candidates?.[0]?.content?.parts;
-      if (Array.isArray(parts)) {
-        // 取最后一个含图片的 part（Gemini 可能先返回文字再返回图）
-        let lastImage: { mime: string; data: string } | null = null;
-        for (const part of parts) {
-          const blob = (part as { inlineData?: { mimeType?: string; data?: string } })?.inlineData;
-          if (blob?.data) lastImage = { mime: blob.mimeType || 'image/png', data: blob.data };
-        }
-        if (lastImage) return `data:${lastImage.mime};base64,${lastImage.data}`;
-      }
-      const feedback = (response as { promptFeedback?: { blockReason?: string } })?.promptFeedback;
-      if (feedback?.blockReason) {
-        lastError = new Error(`内容被过滤: ${feedback.blockReason}`);
-      } else if (!lastError) {
-        lastError = new Error('API 未返回图片，可能被限流或内容策略拦截');
-      }
+      console.log(`[grid] 尝试模型: ${modelId}, 含参考图: ${contents.length > 2}`);
+      const result = await callGeminiImage(ai, modelId, contents, '16:9');
+      if (result) return result;
+      if (!lastError) lastError = new Error('API 未返回图片，可能被限流或内容策略拦截');
     } catch (e) {
       lastError = e;
-      console.warn(`Contact sheet with model ${modelId} failed:`, e);
+      console.warn(`[grid] 模型 ${modelId} 失败:`, e instanceof Error ? e.message : e);
+      if (is400Error(e)) { got400 = true; break; }
       continue;
     }
   }
 
-  // 可能是速率限制：先等 3 秒重试一次
-  await new Promise((r) => setTimeout(r, 3000));
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents,
-      config: {
-        responseModalities: ['TEXT', 'IMAGE'] as string[],
-        imageConfig: { aspectRatio: '16:9', imageSize: '1K' },
-      },
-    });
-    const parts = response.candidates?.[0]?.content?.parts;
-    if (Array.isArray(parts)) {
-      let lastImage: { mime: string; data: string } | null = null;
-      for (const part of parts) {
-        const blob = (part as { inlineData?: { mimeType?: string; data?: string } })?.inlineData;
-        if (blob?.data) lastImage = { mime: blob.mimeType || 'image/png', data: blob.data };
+  // 若 400 且有参考图 → 去掉参考图重试
+  if (got400 && hasRef) {
+    console.log('[grid] 400 错误，去掉参考图重试...');
+    for (const modelId of modelIds) {
+      try {
+        const result = await callGeminiImage(ai, modelId, contentsNoRef, '16:9');
+        if (result) return result;
+      } catch (e) {
+        console.warn(`[grid] 去掉参考图后模型 ${modelId} 仍失败:`, e instanceof Error ? e.message : e);
+        lastError = e;
+        if (is400Error(e)) break;
       }
-      if (lastImage) return `data:${lastImage.mime};base64,${lastImage.data}`;
     }
-    const feedback = (response as { promptFeedback?: { blockReason?: string } })?.promptFeedback;
-    if (feedback?.blockReason) lastError = new Error(`内容被过滤: ${feedback.blockReason}`);
-  } catch (retryErr) {
-    console.warn('Contact sheet retry failed:', retryErr);
   }
 
-  // 仍失败则再等 30 秒重试一次（应对严格限流）
-  await new Promise((r) => setTimeout(r, 30000));
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents,
-      config: {
-        responseModalities: ['TEXT', 'IMAGE'] as string[],
-        imageConfig: { aspectRatio: '16:9', imageSize: '1K' },
-      },
-    });
-    const parts = response.candidates?.[0]?.content?.parts;
-    if (Array.isArray(parts)) {
-      let lastImage: { mime: string; data: string } | null = null;
-      for (const part of parts) {
-        const blob = (part as { inlineData?: { mimeType?: string; data?: string } })?.inlineData;
-        if (blob?.data) lastImage = { mime: blob.mimeType || 'image/png', data: blob.data };
+  // 若不是 400（可能是限流），等 3 秒重试
+  if (!got400) {
+    await new Promise((r) => setTimeout(r, 3000));
+    try {
+      const result = await callGeminiImage(ai, modelIds[0], contents, '16:9');
+      if (result) return result;
+    } catch (retryErr) {
+      console.warn('[grid] 3s 后重试失败:', retryErr instanceof Error ? retryErr.message : retryErr);
+      if (!is400Error(retryErr)) {
+        // 再等 15 秒做最后一次重试
+        await new Promise((r) => setTimeout(r, 15000));
+        try {
+          const result = await callGeminiImage(ai, modelIds[0], contents, '16:9');
+          if (result) return result;
+        } catch (retry2Err) {
+          console.warn('[grid] 15s 后重试失败:', retry2Err instanceof Error ? retry2Err.message : retry2Err);
+        }
       }
-      if (lastImage) return `data:${lastImage.mime};base64,${lastImage.data}`;
     }
-  } catch (retry2Err) {
-    console.warn('Contact sheet retry2 failed:', retry2Err);
   }
 
-  lastGridContactSheetError = lastError instanceof Error ? lastError.message : String(lastError);
-  console.error('Contact sheet image generation failed:', lastError);
+  const errMsg = lastError instanceof Error ? lastError.message : String(lastError);
+  lastGridContactSheetError = got400
+    ? '图片或参考图格式不被 API 接受（400 INVALID_ARGUMENT），请尝试更换图片或去掉参考图后重试'
+    : errMsg;
+  console.error('[grid] 九宫格生成最终失败:', lastError);
   return null;
 }
 
@@ -226,68 +249,78 @@ export async function expandPanelTo2K(
   if (panelIndex < 1 || panelIndex > 9) return null;
 
   const size = options?.imageSize === '4K' ? '4K' : '2K';
-  const base64Match = contactSheetImageDataUrl.match(/^data:image\/\w+;base64,(.+)$/);
-  const base64Data = base64Match ? base64Match[1] : contactSheetImageDataUrl;
-  const mimeType = contactSheetImageDataUrl.match(/^data:(image\/\w+);base64,/)?.[1] || 'image/jpeg';
+  const { data: base64Data, mimeType } = parseDataUrl(contactSheetImageDataUrl);
+  if (!isValidBase64(base64Data)) {
+    console.error('[expand] 接触表 base64 无效');
+    return null;
+  }
 
   const panelDesc = PANEL_DESCRIPTIONS[panelIndex];
   let prompt =
     `附件是一张 3x3 电影接触表（9 格，从左到右、从上到下编号 1–9）。\n\n` +
-    `请仅根据「第 ${panelIndex} 格」的画面内容，生成一张独立的 ${size} 大图。\n` +
-    `该格镜头类型：${panelDesc}。\n` +
-    `要求：人物、服装、照明与接触表中该格一致，输出为一张完整的 ${size} 分辨率图片。`;
+    `请仅根据「第 ${panelIndex} 格」的画面内容，生成一张独立的高分辨率大图。\n` +
+    `该格镜头类型：${panelDesc}。\n\n` +
+    `【严格要求】\n` +
+    `1. 构图必须与接触表第 ${panelIndex} 格完全一致：相同的画面布局、相同的拍摄角度、相同的景别。\n` +
+    `2. 人物的姿态、动作、服装、照明必须与该格完全一致，不得自由发挥或改变任何元素。\n` +
+    `3. 如果该格是一个空镜（无人物）或者局部特写（如手、脚、物品等），则严格保持空镜或局部的构图，不要在画面中添加完整的人物。\n` +
+    `4. 输出一张 16:9 高分辨率图片，画质清晰细腻。`;
   if (options?.characterReferenceImage && options?.ethnicity) {
-    prompt += `\n\n重要：人物为【${options.ethnicity}】，严格按照参考图人物的所有面部特征（五官、脸型、肤色等）一致。`;
+    prompt += `\n\n【人物参考图要求】\n` +
+      `人物为【${options.ethnicity}】。如果第 ${panelIndex} 格中包含人物（非空镜、非纯局部静物），` +
+      `则该人物的面部所有特征（五官、脸型、肤色、发型等）必须与附件中的参考图人物完全一致。` +
+      `但如果第 ${panelIndex} 格是空镜、纯景物、或者只有身体局部（无面部），则不需要参考人物面部特征。`;
   }
   if (options?.auxiliaryPrompt?.trim()) {
     prompt += `\n\n用户补充要求：${options.auxiliaryPrompt.trim()}`;
   }
 
+  const hasRef = !!options?.characterReferenceImage;
   const contents: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
     { text: prompt },
     { inlineData: { mimeType, data: base64Data } },
   ];
-  if (options?.characterReferenceImage) {
-    const refMatch = options.characterReferenceImage.match(/^data:image\/\w+;base64,(.+)$/);
-    const refData = refMatch ? refMatch[1] : options.characterReferenceImage;
-    const refMime = options.characterReferenceImage.match(/^data:(image\/\w+);base64,/)?.[1] || 'image/jpeg';
-    contents.push({ inlineData: { mimeType: refMime, data: refData } });
+  if (hasRef) {
+    const { data: refData, mimeType: refMime } = parseDataUrl(options!.characterReferenceImage!);
+    if (isValidBase64(refData)) {
+      contents.push({ inlineData: { mimeType: refMime, data: refData } });
+    }
   }
 
+  const contentsNoRef: typeof contents = [
+    { text: prompt },
+    { inlineData: { mimeType, data: base64Data } },
+  ];
+
   const ai = new GoogleGenAI({ apiKey });
-  const modelIds = ['gemini-2.5-flash-image', 'gemini-3-pro-image-preview'];
+  const modelIds = ['gemini-3-pro-image-preview', 'gemini-2.5-flash-image'];
   let lastError: unknown;
 
   for (const modelId of modelIds) {
     try {
-      const response = await ai.models.generateContent({
-        model: modelId,
-        contents,
-        config: {
-          responseModalities: ['TEXT', 'IMAGE'] as string[],
-          imageConfig: {
-            aspectRatio: '16:9',
-            imageSize: size,
-          },
-        },
-      });
-
-      const parts = response.candidates?.[0]?.content?.parts;
-      if (Array.isArray(parts)) {
-        let lastImage: { mime: string; data: string } | null = null;
-        for (const part of parts) {
-          const blob = (part as { inlineData?: { mimeType?: string; data?: string } })?.inlineData;
-          if (blob?.data) lastImage = { mime: blob.mimeType || 'image/png', data: blob.data };
-        }
-        if (lastImage) return `data:${lastImage.mime};base64,${lastImage.data}`;
-      }
+      console.log(`[expand] 第${panelIndex}格 → ${size}, 模型: ${modelId}`);
+      const result = await callGeminiImage(ai, modelId, contents, '16:9');
+      if (result) return result;
     } catch (e) {
       lastError = e;
-      console.warn(`Expand panel to 2K with model ${modelId} failed:`, e);
+      console.warn(`[expand] 模型 ${modelId} 失败:`, e instanceof Error ? e.message : e);
+      if (is400Error(e)) {
+        // 400 → 去掉参考图重试
+        if (hasRef) {
+          try {
+            console.log(`[expand] 去掉参考图重试 ${modelId}...`);
+            const result = await callGeminiImage(ai, modelId, contentsNoRef, '16:9');
+            if (result) return result;
+          } catch (e2) {
+            console.warn(`[expand] 去掉参考图后仍失败:`, e2 instanceof Error ? e2.message : e2);
+          }
+        }
+        break;
+      }
       continue;
     }
   }
 
-  console.error('Expand panel to 2K failed:', lastError);
+  console.error('[expand] 2K 生成最终失败:', lastError);
   return null;
 }

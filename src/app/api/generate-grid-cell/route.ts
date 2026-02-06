@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import { expandPanelTo2K } from '@/app/lib/gridImageGen';
+import { parseDataUrl } from '@/app/lib/dataUrlUtils';
 
 /**
  * 根据接触表图 + 格编号（1–9），生成该格的 2K/4K 大图。
@@ -52,9 +53,8 @@ export async function POST(request: NextRequest) {
     }
 
     let savedPath: string | undefined;
-    const match = imageUrl.match(/^data:image\/\w+;base64,(.+)$/);
-    const base64 = match ? match[1] : imageUrl;
-    const ext = imageUrl.startsWith('data:image/png') ? 'png' : 'jpg';
+    const { data: base64, mimeType: cellMime } = parseDataUrl(imageUrl);
+    const ext = cellMime === 'image/png' ? 'png' : 'jpg';
     const num = String(cell).padStart(2, '0');
     const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
     if (typeof step3OutputBaseDir === 'string' && step3OutputBaseDir.trim()) {

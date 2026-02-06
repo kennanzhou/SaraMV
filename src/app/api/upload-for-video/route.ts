@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { uploadImageToOss } from '@/app/lib/ossClient';
+import { parseDataUrl } from '@/app/lib/dataUrlUtils';
 
 /**
  * 为第五步生视频上传图片至阿里云 OSS，返回公网可访问的预签名 URL（私有 bucket 也可用）。
@@ -15,9 +16,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing image (data URL)' }, { status: 400 });
     }
 
-    const base64Match = image.match(/^data:image\/\w+;base64,(.+)$/);
-    const base64Data = base64Match ? base64Match[1] : image;
-    const mimeType = image.match(/^data:(image\/\w+);base64,/)?.[1] || 'image/jpeg';
+    const { data: base64Data, mimeType } = parseDataUrl(image);
 
     // 1. 优先尝试上传到阿里云 OSS（返回预签名 URL，私有 bucket 也可外网访问）
     const ossResult = await uploadImageToOss(base64Data, mimeType);

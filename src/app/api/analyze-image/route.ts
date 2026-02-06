@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { NextRequest, NextResponse } from 'next/server';
 import { readFile } from 'fs/promises';
 import path from 'path';
+import { parseDataUrl } from '@/app/lib/dataUrlUtils';
 
 // 从配置文件读取 API Key
 async function getApiKey(): Promise<string> {
@@ -31,8 +32,7 @@ export async function POST(request: NextRequest) {
     const genAI = new GoogleGenerativeAI(apiKey);
 
     // Extract base64 data from data URL
-    const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
-    const mimeType = image.match(/^data:(image\/\w+);base64,/)?.[1] || 'image/jpeg';
+    const { data: base64Data, mimeType } = parseDataUrl(image);
 
     // 尝试使用不同的模型名称
     const modelNames = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-pro-vision', 'gemini-1.5-pro-latest'];

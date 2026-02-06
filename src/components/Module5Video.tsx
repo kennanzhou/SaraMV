@@ -6,59 +6,92 @@ import { useAppStore } from '@/store/appStore';
 import { useShallow } from 'zustand/react/shallow';
 import ErrorToast from './ErrorToast';
 
-const ETHNICITY_PREFIX: Record<string, string> = {
-  亚洲女性: '【亚洲女性】，严格按照参考图人物的所有面部特征。',
-  欧美女性: '【欧美女性】，严格按照参考图人物的所有面部特征。',
-  亚洲男性: '【亚洲男性】，严格按照参考图人物的所有面部特征。',
-  欧美男性: '【欧美男性】，严格按照参考图人物的所有面部特征。',
-};
+const ETHNICITY_OPTIONS = ['亚洲女性', '欧美女性', '亚洲男性', '欧美男性'] as const;
 
 export default function Module5Video() {
-  const { step4Groups, ethnicityOption, step3OutputBaseDir } = useAppStore(
+  const {
+    step4Groups,
+    ethnicityOption,
+    setEthnicityOption,
+    step3OutputBaseDir,
+    addGeneratedVideo,
+    unlockModule,
+    emptySceneImage,
+    studioSceneImage,
+    scenePrompts,
+    desireScenePrompts,
+  } = useAppStore(
     useShallow((s) => ({
       step4Groups: s.step4Groups,
       ethnicityOption: s.ethnicityOption,
+      setEthnicityOption: s.setEthnicityOption,
       step3OutputBaseDir: s.step3OutputBaseDir,
+      addGeneratedVideo: s.addGeneratedVideo,
+      unlockModule: s.unlockModule,
+      emptySceneImage: s.emptySceneImage,
+      studioSceneImage: s.studioSceneImage,
+      scenePrompts: s.scenePrompts,
+      desireScenePrompts: s.desireScenePrompts,
     }))
   );
   const [selectedImage, setSelectedImage] = useState<{ url: string; label: string } | null>(null);
-  /** 当前选中图片上传至图床后的公网 URL，只有上传成功后才可生成视频 */
   const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [needPublicUrlWarning, setNeedPublicUrlWarning] = useState(false);
-  const [promptSuffix, setPromptSuffix] = useState('');
+  /** 动作描述，默认"升格" */
+  const [actionPrompt, setActionPrompt] = useState('升格');
   const [resolution, setResolution] = useState<'720p' | '1080p'>('720p');
   const [duration, setDuration] = useState(10);
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16' | '1:1' | '4:3'>('16:9');
   const [videoLoading, setVideoLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const ethnicityPrefix = ETHNICITY_PREFIX[ethnicityOption] ?? ETHNICITY_PREFIX['亚洲女性'];
-  const fullPrompt = selectedImage ? `${ethnicityPrefix} ${promptSuffix}`.trim() : '';
+  const ethnicityPrefix = `【${ethnicityOption}】，严格按照参考图人物的所有面部特征。`;
+  const fullPrompt = selectedImage ? `${ethnicityPrefix} ${actionPrompt}`.trim() : '';
 
-  /** 左侧列表：按 step4Groups 顺序，每组为场景图 + 其下所有 2K 图（按生成顺序），同一 URL 只显示一次 */
+  /** 左侧列表：第三步场景图 + 第四步 2K 图，URL 去重 */
   const leftListItems = useMemo(() => {
-    const items: Array<{ type: 'scene'; url: string; label: string; groupLabel: string } | { type: '2k'; url: string; label: string; groupLabel: string }> = [];
+    const items: Array<{ url: string; label: string; section: 'scene' | '2k' }> = [];
     const seenUrls = new Set<string>();
+    // 第三步场景图
+    if (emptySceneImage && !seenUrls.has(emptySceneImage)) {
+      seenUrls.add(emptySceneImage);
+      items.push({ url: emptySceneImage, label: '空场景', section: 'scene' });
+    }
+    if (studioSceneImage && !seenUrls.has(studioSceneImage)) {
+      seenUrls.add(studioSceneImage);
+      items.push({ url: studioSceneImage, label: '录音棚场景', section: 'scene' });
+    }
+    scenePrompts.forEach((p, i) => {
+      if (p.imageUrl && !seenUrls.has(p.imageUrl)) {
+        seenUrls.add(p.imageUrl);
+        items.push({ url: p.imageUrl, label: `场景 ${i + 1}`, section: 'scene' });
+      }
+    });
+    desireScenePrompts.forEach((p, i) => {
+      if (p.imageUrl && !seenUrls.has(p.imageUrl)) {
+        seenUrls.add(p.imageUrl);
+        items.push({ url: p.imageUrl, label: `爱欲场景 ${i + 1}`, section: 'scene' });
+      }
+    });
+    // 第四步 2K 图
     step4Groups.forEach((g) => {
-      items.push({ type: 'scene', url: g.sourceImageUrl, label: g.sourceLabel, groupLabel: g.sourceLabel });
-      g.sheets.forEach((s, sheetIdx) => {
-        s.panel2KOrdered.forEach((p, idx) => {
+      g.sheets.forEach((s) => {
+        s.panel2KOrdered.forEach((p) => {
           if (seenUrls.has(p.imageUrl)) return;
           seenUrls.add(p.imageUrl);
           items.push({
-            type: '2k',
             url: p.imageUrl,
-            label: `${g.sourceLabel} - 2K #${idx + 1} (格${p.panelIndex})`,
-            groupLabel: g.sourceLabel,
+            label: `${g.sourceLabel} - 第${p.panelIndex}格 2K`,
+            section: '2k',
           });
         });
       });
     });
     return items;
-  }, [step4Groups]);
+  }, [step4Groups, emptySceneImage, studioSceneImage, scenePrompts, desireScenePrompts]);
 
-  const hasStep4Output = step4Groups.some((g) => g.sheets.some((s) => s.panel2KOrdered.length > 0));
+  const hasImages = leftListItems.length > 0;
 
   const handleUploadToImageHost = async () => {
     if (!selectedImage?.url) {
@@ -108,8 +141,14 @@ export default function Module5Video() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || '视频生成失败');
-      if (data.videoUrl) window.open(data.videoUrl, '_blank');
-      if (data.savedPath) setErrorMessage(null);
+      if (data.videoUrl) {
+        addGeneratedVideo({
+          videoUrl: data.videoUrl,
+          savedPath: data.savedPath || undefined,
+          sourceLabel: selectedImage?.label || '未知来源',
+        });
+        unlockModule(6);
+      }
     } catch (e) {
       console.error(e);
       setErrorMessage(e instanceof Error ? e.message : '视频生成失败，请重试');
@@ -118,7 +157,7 @@ export default function Module5Video() {
     }
   };
 
-  if (!hasStep4Output) {
+  if (!hasImages) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <div className="text-center">
@@ -127,7 +166,7 @@ export default function Module5Video() {
             <span className="text-[var(--accent)]">05</span> 视频生成
           </h2>
           <p className="text-[var(--foreground-muted)]">
-            请先在第四步至少生成一张九宫格 2K 大图后，本页才会解锁
+            请先在第三步生成场景图或在第四步生成 2K 大图后，本页才会解锁
           </p>
         </div>
       </div>
@@ -136,46 +175,69 @@ export default function Module5Video() {
 
   return (
     <div className="flex h-[calc(100vh-6rem)] min-h-[400px] gap-4 -m-2 p-0">
-      {/* 左侧 25%：场景图 + 九宫格 2K 图列表，按组、按生成顺序 */}
+      {/* 左侧 25%：仅 2K 图列表 */}
       <aside className="w-1/4 min-w-[200px] flex flex-col border-r border-[var(--border)] pr-4 overflow-hidden">
         <div className="mb-3 flex-shrink-0">
           <h1 className="text-xl font-light">
             <span className="text-[var(--accent)]">05</span> 视频生成
           </h1>
           <p className="text-xs text-[var(--foreground-muted)] mt-1">
-            选择一张图片，在右侧输入提示词并调用 Grok API 生成视频
+            选择一张图片，上传至图床后生成视频
           </p>
         </div>
         <div className="flex-1 overflow-y-auto overflow-x-visible space-y-2 min-h-0 px-1">
-          {leftListItems.length === 0 ? (
-            <p className="text-sm text-[var(--foreground-muted)] py-4">暂无图片</p>
-          ) : (
-            leftListItems.map((item, idx) => (
-            <button
-              key={`${item.type}-${idx}-${item.url.slice(0, 30)}`}
-                type="button"
-                onClick={() => {
-                  setSelectedImage({ url: item.url, label: item.label });
-                  setUploadedImageUrl(null);
-                  setNeedPublicUrlWarning(false);
-                }}
-                className={`block w-full rounded-lg overflow-hidden border text-left transition-shadow ${
-                  selectedImage?.url === item.url
-                    ? 'border-[var(--accent)] ring-2 ring-[var(--accent)] ring-inset'
-                    : 'border-[var(--border)] hover:ring-2 hover:ring-[var(--accent)]/50 hover:ring-inset'
-                }`}
-              >
-                <div className="aspect-video bg-[var(--background-tertiary)]">
-                  <img src={item.url} alt={item.label} className="w-full h-full object-cover" />
-                </div>
-                <span className="block text-xs text-[var(--foreground-muted)] px-2 py-1 truncate">{item.label}</span>
-              </button>
-            ))
+          {leftListItems.length > 0 && leftListItems.some((i) => i.section === 'scene') && (
+            <p className="text-[10px] text-[var(--foreground-muted)] font-medium uppercase tracking-wider pt-1">场景图</p>
           )}
+          {leftListItems.filter((i) => i.section === 'scene').map((item, idx) => (
+            <button
+              key={`scene-${idx}-${item.url.slice(0, 30)}`}
+              type="button"
+              onClick={() => {
+                setSelectedImage({ url: item.url, label: item.label });
+                setUploadedImageUrl(null);
+                setNeedPublicUrlWarning(false);
+              }}
+              className={`block w-full rounded-lg overflow-hidden border text-left transition-shadow ${
+                selectedImage?.url === item.url
+                  ? 'border-[var(--accent)] ring-2 ring-[var(--accent)] ring-inset'
+                  : 'border-[var(--border)] hover:ring-2 hover:ring-[var(--accent)]/50 hover:ring-inset'
+              }`}
+            >
+              <div className="aspect-video bg-[var(--background-tertiary)]">
+                <img src={item.url} alt={item.label} className="w-full h-full object-cover" />
+              </div>
+              <span className="block text-xs text-[var(--foreground-muted)] px-2 py-1 truncate">{item.label}</span>
+            </button>
+          ))}
+          {leftListItems.some((i) => i.section === '2k') && (
+            <p className="text-[10px] text-[var(--foreground-muted)] font-medium uppercase tracking-wider pt-2">2K 大图</p>
+          )}
+          {leftListItems.filter((i) => i.section === '2k').map((item, idx) => (
+            <button
+              key={`2k-${idx}-${item.url.slice(0, 30)}`}
+              type="button"
+              onClick={() => {
+                setSelectedImage({ url: item.url, label: item.label });
+                setUploadedImageUrl(null);
+                setNeedPublicUrlWarning(false);
+              }}
+              className={`block w-full rounded-lg overflow-hidden border text-left transition-shadow ${
+                selectedImage?.url === item.url
+                  ? 'border-[var(--accent)] ring-2 ring-[var(--accent)] ring-inset'
+                  : 'border-[var(--border)] hover:ring-2 hover:ring-[var(--accent)]/50 hover:ring-inset'
+              }`}
+            >
+              <div className="aspect-video bg-[var(--background-tertiary)]">
+                <img src={item.url} alt={item.label} className="w-full h-full object-cover" />
+              </div>
+              <span className="block text-xs text-[var(--foreground-muted)] px-2 py-1 truncate">{item.label}</span>
+            </button>
+          ))}
         </div>
       </aside>
 
-      {/* 右侧：选中图缩略图 + 提示词（人种前缀不可删）+ 分辨率/时长/宽高比 + 生成按钮 */}
+      {/* 右侧 */}
       <main className="flex-1 min-w-0 flex flex-col bg-[var(--background-tertiary)] rounded-lg border border-[var(--border)] p-6 overflow-y-auto">
         <h2 className="text-lg font-light mb-4">
           <span className="text-[var(--accent)]">Grok</span> 视频生成
@@ -210,7 +272,7 @@ export default function Module5Video() {
                     )}
                   </button>
                   <p className="text-[10px] text-[var(--foreground-muted)] mt-1">
-                    生视频需要图片的公网地址，请先上传；上传成功后即可使用下方功能
+                    生视频需要图片的公网地址，请先上传
                   </p>
                 </div>
               ) : (
@@ -224,18 +286,36 @@ export default function Module5Video() {
               )}
             </div>
 
+            {/* 提示词：左右两栏 */}
             <div className="mb-4">
-              <label className="text-sm text-[var(--foreground-muted)] block mb-2">提示词（人种前缀已固定，来自第四步选择）</label>
-              <div className="rounded-lg border border-[var(--border)] bg-[var(--background)] p-3 text-xs text-[var(--foreground-muted)] mb-2">
-                {ethnicityPrefix}
+              <label className="text-sm text-[var(--foreground-muted)] block mb-2">提示词</label>
+              <div className="flex gap-3">
+                <div className="flex-shrink-0 w-36">
+                  <label className="text-[10px] text-[var(--foreground-muted)] block mb-1">人种</label>
+                  <select
+                    value={ethnicityOption}
+                    onChange={(e) => setEthnicityOption(e.target.value as typeof ethnicityOption)}
+                    className="input-field w-full text-sm py-2"
+                  >
+                    {ETHNICITY_OPTIONS.map((o) => (
+                      <option key={o} value={o}>{o}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex-1">
+                  <label className="text-[10px] text-[var(--foreground-muted)] block mb-1">动作 / 风格</label>
+                  <input
+                    type="text"
+                    value={actionPrompt}
+                    onChange={(e) => setActionPrompt(e.target.value)}
+                    placeholder="升格"
+                    className="input-field w-full text-sm py-2"
+                  />
+                </div>
               </div>
-              <textarea
-                value={promptSuffix}
-                onChange={(e) => setPromptSuffix(e.target.value)}
-                placeholder="在此输入补充提示词..."
-                className="input-field w-full min-h-[100px] resize-y"
-              />
-              <p className="text-[10px] text-[var(--foreground-muted)] mt-1">完整提示词将为人种前缀 + 上方输入内容</p>
+              <p className="text-[10px] text-[var(--foreground-muted)] mt-1.5">
+                完整提示词：{fullPrompt || '（请选择图片）'}
+              </p>
             </div>
 
             <div className="grid grid-cols-3 gap-4 mb-4">
@@ -299,7 +379,7 @@ export default function Module5Video() {
           <div className="flex-1 flex items-center justify-center text-center text-[var(--foreground-muted)]">
             <div>
               <ImageIcon size={48} className="mx-auto mb-3 opacity-60" />
-              <p>请在左侧选择一张图片</p>
+              <p>请在左侧选择一张 2K 图片</p>
             </div>
           </div>
         )}

@@ -68,6 +68,7 @@ export default function Module4Video() {
     addStep4Panel2K,
     addStep4GroupSource,
     unlockModule,
+    studioSceneImage,
   } = useAppStore(
     useShallow((s) => ({
       uploadedImage: s.uploadedImage,
@@ -83,6 +84,7 @@ export default function Module4Video() {
       addStep4Panel2K: s.addStep4Panel2K,
       addStep4GroupSource: s.addStep4GroupSource,
       unlockModule: s.unlockModule,
+      studioSceneImage: s.studioSceneImage,
     }))
   );
 
@@ -113,6 +115,9 @@ export default function Module4Video() {
     if (emptySceneImage) {
       list.push({ id: 'empty', url: emptySceneImage, label: '空场景' });
     }
+    if (studioSceneImage) {
+      list.push({ id: 'studio', url: studioSceneImage, label: '录音棚场景' });
+    }
     scenePrompts.forEach((p, i) => {
       if (p.imageUrl) list.push({ id: p.id, url: p.imageUrl, label: `场景 ${i + 1}` });
     });
@@ -120,7 +125,7 @@ export default function Module4Video() {
       if (p.imageUrl) list.push({ id: p.id, url: p.imageUrl, label: `爱欲场景 ${i + 1}` });
     });
     return list;
-  }, [emptySceneImage, scenePrompts, desireScenePrompts]);
+  }, [emptySceneImage, studioSceneImage, scenePrompts, desireScenePrompts]);
 
   const hasStep3Images = step3Images.length > 0;
   const isUnlocked = unlockedModules.includes(4) || (unlockedModules.includes(3) && hasStep3Images);
@@ -134,14 +139,13 @@ export default function Module4Video() {
   }, [step4Groups, contactSheetSourceId, contactSheetImage, contactSheetSavedDir]);
 
   const handleGenerateGrid = async (sourceId: string, imageUrl: string, label: string, gridType: 'normal' | 'closeup' = 'normal') => {
-    if (contactSheetImage && contactSheetSourceId != null && contactSheetLabel) {
-      addStep4ContactSheet(contactSheetSourceId, contactSheetLabel, step3Images.find((i) => i.id === contactSheetSourceId)?.url ?? '', contactSheetImage, contactSheetSavedDir ?? '');
-    }
+    // 注：不再在此处重复保存当前接触表，addStep4ContactSheet 已做去重
     setGridLoading(true);
     setContactSheetImage(null);
     setContactSheetSavedDir(null);
     setContactSheetLabel(label);
     setContactSheetSourceId(null);
+    setSelectedPanel(null);
     try {
       const res = await fetch('/api/generate-grid', {
         method: 'POST',
@@ -510,15 +514,23 @@ export default function Module4Video() {
                     {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
                       <div
                         key={n}
-                        onMouseEnter={() => setSelectedPanel(n)}
-                        className="relative border border-black/30 hover:bg-[var(--accent)]/25 transition-colors"
+                        onClick={() => setSelectedPanel((prev) => prev === n ? null : n)}
+                        className={`relative border cursor-pointer transition-all ${
+                          selectedPanel === n
+                            ? 'border-[var(--accent)] border-2 bg-[var(--accent)]/15 ring-2 ring-[var(--accent)] ring-inset shadow-[inset_0_0_16px_rgba(224,144,156,0.3)]'
+                            : 'border-black/30 hover:bg-[var(--accent)]/10'
+                        }`}
                       >
                         {expandingPanel === n ? (
                           <div className="absolute inset-0 flex items-center justify-center">
                             <span className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
                           </div>
                         ) : (
-                          <span className="absolute bottom-1 right-1 text-[10px] font-mono text-white/90 drop-shadow-md bg-black/40 px-1.5 py-0.5 rounded">
+                          <span className={`absolute bottom-1 right-1 text-[10px] font-mono drop-shadow-md px-1.5 py-0.5 rounded ${
+                            selectedPanel === n
+                              ? 'text-white bg-[var(--accent)]/80'
+                              : 'text-white/90 bg-black/40'
+                          }`}>
                             第{n}格
                           </span>
                         )}

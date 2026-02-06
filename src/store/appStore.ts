@@ -51,12 +51,26 @@ export interface AppState {
   generatedStorySegments: string[];
   /** 第二步爱欲现场中生成的「另一日本场景」描述，用于第三步爱欲现场提示词 */
   generatedStoryOtherScene: string;
+  /** 第二步歌曲创作：已生成歌曲列表 */
+  generatedSongs: Array<{
+    id: string;
+    url: string;
+    title: string;
+    model: string;
+    duration?: number;
+    savedPath?: string;
+    createdAt: string;
+  }>;
+  /** 第二步歌曲创作：用户选定的最终歌曲 ID */
+  finalSongId: string | null;
 
   // Module 3: Storyboard Creation
   scenePrompts: Array<{ id: string; prompt: string; imageUrl: string | null; imageHistory?: string[] }>;
   desireScenePrompts: Array<{ id: string; prompt: string; imageUrl: string | null; imageHistory?: string[] }>;
   /** 第三步首次保存场景图时得到的目录（如 output/scene/002_xxx_20260204），第四步同目录保存 */
   step3OutputBaseDir: string | null;
+  /** 第三步录音棚模式生成的场景图（默认 2K），第四步可用来生九宫格 */
+  studioSceneImage: string | null;
 
   // Module 4: 人种（与人物参考图一起用于九宫格/2K 强调面部），第五步提示词前缀
   ethnicityOption: '亚洲女性' | '欧美女性' | '亚洲男性' | '欧美男性';
@@ -70,6 +84,14 @@ export interface AppState {
       savedDir: string;
       panel2KOrdered: Array<{ panelIndex: number; imageUrl: string }>;
     }>;
+  }>;
+
+  // Module 6: 已生成视频列表
+  generatedVideos: Array<{
+    videoUrl: string;
+    savedPath?: string;
+    sourceLabel: string;
+    createdAt: string;
   }>;
 
   // Actions
@@ -91,15 +113,19 @@ export interface AppState {
   setGeneratedStory: (story: string) => void;
   setGeneratedStorySegments: (v: string[]) => void;
   setGeneratedStoryOtherScene: (v: string) => void;
+  addGeneratedSong: (song: { id: string; url: string; title: string; model: string; duration?: number; savedPath?: string }) => void;
+  setFinalSongId: (id: string | null) => void;
   setScenePrompts: (prompts: Array<{ id: string; prompt: string; imageUrl: string | null; imageHistory?: string[] }>) => void;
   setDesireScenePrompts: (prompts: Array<{ id: string; prompt: string; imageUrl: string | null; imageHistory?: string[] }>) => void;
   setStep3OutputBaseDir: (dir: string | null) => void;
+  setStudioSceneImage: (image: string | null) => void;
   setEthnicityOption: (v: '亚洲女性' | '欧美女性' | '亚洲男性' | '欧美男性') => void;
   setStep4Groups: (groups: AppState['step4Groups']) => void;
   addStep4ContactSheet: (sourceId: string, sourceLabel: string, sourceImageUrl: string, contactImageUrl: string, savedDir: string) => void;
   addStep4Panel2K: (sourceId: string, contactImageUrl: string, panelIndex: number, imageUrl: string) => void;
   /** 将 2K 大图作为新来源加入左侧栏，便于以其为基础继续生九宫格 */
   addStep4GroupSource: (sourceId: string, sourceLabel: string, sourceImageUrl: string) => void;
+  addGeneratedVideo: (video: { videoUrl: string; savedPath?: string; sourceLabel: string }) => void;
   resetModule1: () => void;
 }
 
@@ -127,15 +153,21 @@ export const useAppStore = create<AppState>((set) => ({
   generatedStory: '',
   generatedStorySegments: [],
   generatedStoryOtherScene: '',
+  generatedSongs: [],
+  finalSongId: null,
 
   // Module 3
   scenePrompts: [],
   desireScenePrompts: [],
   step3OutputBaseDir: null,
+  studioSceneImage: null,
 
   // Module 4
   ethnicityOption: '亚洲女性',
   step4Groups: [],
+
+  // Module 6
+  generatedVideos: [],
 
   // Actions
   setCurrentModule: (module) => set({ currentModule: module }),
@@ -162,15 +194,24 @@ export const useAppStore = create<AppState>((set) => ({
   setGeneratedStory: (story) => set({ generatedStory: story }),
   setGeneratedStorySegments: (v) => set({ generatedStorySegments: v }),
   setGeneratedStoryOtherScene: (v) => set({ generatedStoryOtherScene: v }),
+  addGeneratedSong: (song) => set((state) => ({
+    generatedSongs: [...state.generatedSongs, { ...song, createdAt: new Date().toISOString() }],
+  })),
+  setFinalSongId: (id) => set({ finalSongId: id }),
   setScenePrompts: (prompts) => set({ scenePrompts: prompts }),
   setDesireScenePrompts: (prompts) => set({ desireScenePrompts: prompts }),
   setStep3OutputBaseDir: (dir) => set({ step3OutputBaseDir: dir }),
+  setStudioSceneImage: (image) => set({ studioSceneImage: image }),
   setEthnicityOption: (v) => set({ ethnicityOption: v }),
   setStep4Groups: (groups) => set({ step4Groups: groups }),
   addStep4ContactSheet: (sourceId, sourceLabel, sourceImageUrl, contactImageUrl, savedDir) => set((state) => {
     const existing = state.step4Groups.find((x) => x.sourceId === sourceId);
     const newSheet = { contactImageUrl, savedDir, panel2KOrdered: [] as Array<{ panelIndex: number; imageUrl: string }> };
     if (existing) {
+      // 去重：如果同一 contactImageUrl 已存在则跳过
+      if (existing.sheets.some((s) => s.contactImageUrl === contactImageUrl)) {
+        return state;
+      }
       const groups = state.step4Groups.map((g) =>
         g.sourceId === sourceId ? { ...g, sheets: [...g.sheets, newSheet] } : g
       );
@@ -199,6 +240,9 @@ export const useAppStore = create<AppState>((set) => ({
       step4Groups: [...state.step4Groups, { sourceId, sourceLabel, sourceImageUrl, sheets: [] }],
     };
   }),
+  addGeneratedVideo: (video) => set((state) => ({
+    generatedVideos: [...state.generatedVideos, { ...video, createdAt: new Date().toISOString() }],
+  })),
   resetModule1: () => set({
     csvKeywords: [],
     selectedKeyword: null,

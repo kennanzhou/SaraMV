@@ -6,6 +6,7 @@ import Module2Song from '@/components/Module2Song';
 import Module3Storyboard from '@/components/Module3Storyboard';
 import Module4Video from '@/components/Module4Video';
 import Module5Video from '@/components/Module5Video';
+import Module6VideoGallery from '@/components/Module6VideoGallery';
 
 export default function Home() {
   const currentModule = useAppStore((s) => s.currentModule);
@@ -22,6 +23,8 @@ export default function Home() {
         return <Module4Video />;
       case 5:
         return <Module5Video />;
+      case 6:
+        return <Module6VideoGallery />;
       default:
         return <Module1Lyrics />;
     }

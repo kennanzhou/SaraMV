@@ -7,6 +7,7 @@ import {
   Film, 
   Video, 
   PlayCircle,
+  MonitorPlay,
   Settings,
   ScrollText,
   FileEdit
@@ -20,21 +21,29 @@ import PromptEditPanel from './PromptEditPanel';
 const modules = [
   { id: 1, icon: Mic2, label: '歌词创作' },
   { id: 2, icon: Music, label: '歌曲创作' },
-  { id: 3, icon: Film, label: '分镜创作' },
+  { id: 3, icon: Film, label: '场景创作' },
   { id: 4, icon: Video, label: '分镜创作' },
-  { id: 5, icon: PlayCircle, label: 'MV 创作' },
+  { id: 5, icon: PlayCircle, label: 'AI 生视频' },
+  { id: 6, icon: MonitorPlay, label: '视频浏览' },
 ];
 
 export default function Sidebar() {
-  const { currentModule, unlockedModules, setCurrentModule, step4Groups } = useAppStore(
+  const { currentModule, unlockedModules, setCurrentModule, step4Groups, generatedVideos, scenePrompts, desireScenePrompts, emptySceneImage, studioSceneImage } = useAppStore(
     useShallow((s) => ({
       currentModule: s.currentModule,
       unlockedModules: s.unlockedModules,
       setCurrentModule: s.setCurrentModule,
       step4Groups: s.step4Groups,
+      generatedVideos: s.generatedVideos,
+      scenePrompts: s.scenePrompts,
+      desireScenePrompts: s.desireScenePrompts,
+      emptySceneImage: s.emptySceneImage,
+      studioSceneImage: s.studioSceneImage,
     }))
   );
   const hasStep4Output = step4Groups.some((g) => g.sheets.some((s) => s.panel2KOrdered.length > 0));
+  const hasStep3Images = !!emptySceneImage || !!studioSceneImage || scenePrompts.some((p) => !!p.imageUrl) || desireScenePrompts.some((p) => !!p.imageUrl);
+  const hasVideos = generatedVideos.length > 0;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [devLogOpen, setDevLogOpen] = useState(false);
   const [promptEditOpen, setPromptEditOpen] = useState(false);
@@ -42,7 +51,7 @@ export default function Sidebar() {
   return (
     <>
       <aside className="fixed left-0 top-0 h-full w-16 bg-[var(--background-secondary)] border-r-2 border-[var(--accent)]/30 flex flex-col items-center py-6 z-50">
-        {/* Logo：玫瑰色渐变 + 发光，一眼能看出是新版 */}
+        {/* Logo */}
         <div className="mb-8">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-dim)] flex items-center justify-center shadow-[0_0_24px_var(--accent-glow)] ring-2 ring-[var(--accent)]/20">
             <span className="text-[var(--background)] font-bold text-base">S</span>
@@ -53,7 +62,14 @@ export default function Sidebar() {
         <nav className="flex flex-col gap-4 flex-1">
           {modules.map(({ id, icon: Icon, label }) => {
             const isActive = currentModule === id;
-            const isUnlocked = id === 5 ? (unlockedModules.includes(id) || hasStep4Output) : unlockedModules.includes(id);
+            let isUnlocked: boolean;
+            if (id === 5) {
+              isUnlocked = unlockedModules.includes(id) || hasStep4Output || hasStep3Images;
+            } else if (id === 6) {
+              isUnlocked = unlockedModules.includes(id) || hasVideos;
+            } else {
+              isUnlocked = unlockedModules.includes(id);
+            }
 
             return (
               <button
@@ -100,8 +116,6 @@ export default function Sidebar() {
             title="开发日志"
           >
             <ScrollText size={20} strokeWidth={1.5} />
-            
-            {/* Tooltip */}
             <span className="absolute left-full ml-3 px-2 py-1 bg-[var(--background-tertiary)] text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none border border-[var(--border)]">
               开发日志
             </span>
@@ -114,8 +128,6 @@ export default function Sidebar() {
             title="设置"
           >
             <Settings size={20} strokeWidth={1.5} />
-            
-            {/* Tooltip */}
             <span className="absolute left-full ml-3 px-2 py-1 bg-[var(--background-tertiary)] text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none border border-[var(--border)]">
               设置
             </span>
@@ -126,19 +138,14 @@ export default function Sidebar() {
         </div>
       </aside>
 
-      {/* Settings Panel */}
       <SettingsPanel 
         isOpen={settingsOpen} 
         onClose={() => setSettingsOpen(false)} 
       />
-
-      {/* Prompt Edit Panel */}
       <PromptEditPanel
         isOpen={promptEditOpen}
         onClose={() => setPromptEditOpen(false)}
       />
-
-      {/* Dev Log Panel */}
       <DevLog
         isOpen={devLogOpen}
         onClose={() => setDevLogOpen(false)}
