@@ -202,31 +202,40 @@ export async function generateContactSheetImage(
   const closeupPrompt = overrides?.gridCloseupPrompt?.trim();
   const intro = overrides?.gridContactSheetPrompt ?? null;
   const lines = overrides?.gridPanelDescriptions ?? null;
+  const gridFormatRule =
+    '\n\n【画面格式严格要求】\n' +
+    '1. 输出一张 16:9 的完整图片，内含 3×3 共 9 个格子。\n' +
+    '2. 格子之间仅用纯黑色细直线分隔（约 2-3 像素宽），不得有任何文字、编号、胶卷齿孔、胶片边框、时间码、水印或任何装饰元素。\n' +
+    '3. 图片四周边缘也不要有任何边框装饰，画面直接到边。\n' +
+    '4. 保持影调与风格一致。';
+
   let prompt: string;
   if (closeupPrompt) {
-    prompt = closeupPrompt + '\n\n输出这一张包含 9 格的 16:9 接触表图片即可，镜头之间用黑色细线分割，保持影调与风格一致。';
+    prompt = closeupPrompt + gridFormatRule;
   } else {
     prompt = intro && Array.isArray(lines) && lines.length >= 9
-      ? intro + lines.map((line, i) => `${i + 1}: ${line}`).join('\n') + '\n\n输出这一张包含 9 格的接触表图片即可，保持影调与风格一致。'
-      : '你是一位日本人像摄影师。根据附件中的参考图，生成「一张」电影接触表图片。\n\n' +
-      '要求：这一张图必须是一幅完整的 3x3 网格图，包含 9 个画面格子（从左到右、从上到下编号 1–9）。\n' +
+      ? intro + lines.map((line, i) => `${i + 1}: ${line}`).join('\n') + gridFormatRule
+      : '你是一位日本人像摄影师。根据附件中的源图，生成「一张」电影接触表图片。\n\n' +
+      '要求：这一张图必须是一幅完整的 3×3 网格图，包含 9 个画面格子（从左到右、从上到下编号 1–9）。\n' +
       '每个格子的镜头类型如下，同一人物、同一服装与照明在所有格中保持一致：\n' +
       '1: 特长镜头 ELS，主体在广阔环境中显得渺小\n' +
       '2: 长镜头 LS，整个主体头到脚可见\n' +
       '3: 中景长镜头 MLS，膝盖以上或 3/4 视角\n' +
       '4: 中景 MS，腰部以上\n' +
-      '5: 中景特写 MCU，胸部以上亲密近景\n' +
+      '5: 中景特写 MCU，肩部以上近景\n' +
       '6: 特写 CU，面部或正面紧凑构图\n' +
       '7: 极特写 ECU，眼睛、手部等微距细节\n' +
       '8: 低角度 虫眼，从地面向上仰视\n' +
-      '9: 高角度 鸟瞰，从上方俯视\n\n' +
-      '输出这一张包含 9 格的接触表图片即可，保持影调与风格一致。';
+      '9: 高角度 鸟瞰，从上方俯视\n' +
+      gridFormatRule;
   }
   if (options?.characterReferenceImage && options?.ethnicity) {
-    prompt += `\n\n重要：人物为【${options.ethnicity}】，严格按照参考图人物的所有面部特征（五官、脸型、肤色等）一致。`;
+    prompt += `\n\n【人物面部参考（仅限面部）】\n` +
+      `人物为【${options.ethnicity}】。附件中的第二张图片是人物面部参考图，仅用于参考人物的面部特征（五官、脸型、肤色等）。\n` +
+      `【特别注意】人物的服装、造型、姿态必须完全基于第一张源图，不得受参考图影响。参考图仅用于面部特征参考，不可参考其服装和背景。`;
   }
   if (options?.characterDescription?.trim()) {
-    prompt += `\n\n【人物特征限定】\n以下是参考图中人物的详细特征，所有格中的人物必须严格符合这些特征：\n${options.characterDescription.trim()}`;
+    prompt += `\n\n【人物特征限定】\n以下是参考图中人物的详细面部特征，所有格中的人物面部必须严格符合这些特征（但服装和姿态以源图为准）：\n${options.characterDescription.trim()}`;
   }
 
   // 构造 contents：文本 + 源图 + 可选参考图
@@ -348,31 +357,46 @@ export async function expandPanelTo2K(
   if (!apiKey) return null;
   if (panelIndex < 1 || panelIndex > 9) return null;
 
-  const size = options?.imageSize === '4K' ? '4K' : '2K';
+  const size = options?.imageSize === '2K' ? '2K' : '4K';
   const { data: base64Data, mimeType } = parseDataUrl(contactSheetImageDataUrl);
   if (!isValidBase64(base64Data)) {
     console.error('[expand] 接触表 base64 无效');
     return null;
   }
 
+  // 先裁剪出单格图片，避免送整张九宫格导致模型只是放大小格
+  let panelImageData: string;
+  let panelImageMime: string;
+  try {
+    const cropped = await cropPanelFromSheet(base64Data, panelIndex);
+    panelImageData = cropped.data;
+    panelImageMime = cropped.mimeType;
+    console.log(`[expand] 已裁剪第${panelIndex}格，大小: ${Math.round(panelImageData.length * 0.75 / 1024)}KB`);
+  } catch (cropErr) {
+    console.warn('[expand] 裁剪失败，使用整张接触表:', cropErr instanceof Error ? cropErr.message : cropErr);
+    panelImageData = base64Data;
+    panelImageMime = mimeType;
+  }
+
   const panelDesc = PANEL_DESCRIPTIONS[panelIndex];
   let prompt =
-    `附件是一张 3x3 电影接触表（9 格，从左到右、从上到下编号 1–9）。\n\n` +
-    `请仅根据「第 ${panelIndex} 格」的画面内容，生成一张独立的高分辨率大图。\n` +
-    `该格镜头类型：${panelDesc}。\n\n` +
+    `附件是一张电影场景图（从九宫格接触表中提取的单格画面）。\n\n` +
+    `请根据这张图片的内容，完全重新渲染生成一张独立的高分辨率 ${size} 大图。\n` +
+    `该画面的镜头类型：${panelDesc}。\n\n` +
     `【严格要求】\n` +
-    `1. 构图必须与接触表第 ${panelIndex} 格完全一致：相同的画面布局、相同的拍摄角度、相同的景别。\n` +
-    `2. 人物的姿态、动作、服装、照明必须与该格完全一致，不得自由发挥或改变任何元素。\n` +
-    `3. 如果该格是一个空镜（无人物）或者局部特写（如手、脚、物品等），则严格保持空镜或局部的构图，不要在画面中添加完整的人物。\n` +
-    `4. 输出一张 16:9 高分辨率图片，画质清晰细腻。`;
+    `1. 这是一次完整的高清重新渲染，不是简单的放大或超分辨率处理。请生成全新的高清细节，包括皮肤纹理、发丝、布料质感、光影层次等。\n` +
+    `2. 构图必须与附件图片完全一致：相同的画面布局、相同的拍摄角度、相同的景别。\n` +
+    `3. 人物的姿态、动作、服装、照明必须与附件完全一致，不得自由发挥或改变任何元素。\n` +
+    `4. 如果画面是一个空镜（无人物）或者局部特写（如手、脚、物品等），则严格保持空镜或局部的构图，不要在画面中添加完整的人物。\n` +
+    `5. 输出一张 16:9 高分辨率图片，画质清晰细腻，细节丰富。`;
   if (options?.characterReferenceImage && options?.ethnicity) {
-    prompt += `\n\n【人物参考图要求】\n` +
-      `人物为【${options.ethnicity}】。如果第 ${panelIndex} 格中包含人物（非空镜、非纯局部静物），` +
-      `则该人物的面部所有特征（五官、脸型、肤色、发型等）必须与附件中的参考图人物完全一致。` +
-      `但如果第 ${panelIndex} 格是空镜、纯景物、或者只有身体局部（无面部），则不需要参考人物面部特征。`;
+    prompt += `\n\n【人物面部参考（仅限面部）】\n` +
+      `人物为【${options.ethnicity}】。附件中的第二张图片是人物面部参考图。\n` +
+      `如果画面中包含人物面部，则人物的面部特征（五官、脸型、肤色、发型等）必须与参考图人物完全一致。\n` +
+      `【特别注意】人物的服装、造型、姿态必须完全基于第一张图片（源画面），不得受面部参考图影响。参考图仅用于面部特征参考。`;
   }
   if (options?.characterDescription?.trim()) {
-    prompt += `\n\n【人物特征限定】\n以下是参考图中人物的详细特征，生成的图片中人物必须严格符合这些特征：\n${options.characterDescription.trim()}`;
+    prompt += `\n\n【人物特征限定】\n以下是参考图中人物的详细面部特征，生成的图片中人物面部必须严格符合这些特征（但服装和姿态以源画面为准）：\n${options.characterDescription.trim()}`;
   }
   if (options?.auxiliaryPrompt?.trim()) {
     prompt += `\n\n用户补充要求：${options.auxiliaryPrompt.trim()}`;
@@ -381,7 +405,7 @@ export async function expandPanelTo2K(
   const hasRef = !!options?.characterReferenceImage;
   const contents: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
     { text: prompt },
-    { inlineData: { mimeType, data: base64Data } },
+    { inlineData: { mimeType: panelImageMime, data: panelImageData } },
   ];
   if (hasRef) {
     const parsed = parseDataUrl(options!.characterReferenceImage!);
@@ -395,7 +419,7 @@ export async function expandPanelTo2K(
 
   const contentsNoRef: typeof contents = [
     { text: prompt },
-    { inlineData: { mimeType, data: base64Data } },
+    { inlineData: { mimeType: panelImageMime, data: panelImageData } },
   ];
 
   const ai = new GoogleGenAI({ apiKey });
@@ -435,65 +459,54 @@ export async function expandPanelTo2K(
     }
   }
 
-  // PROHIBITED_CONTENT 策略：裁剪出单格图片 + 简化提示词重试
-  // 整张九宫格中其他格可能触发了过滤，裁剪出单格可以避免干扰
+  // PROHIBITED_CONTENT 策略：简化提示词重试（已默认裁剪了单格）
   if (gotProhibited) {
-    console.log(`[expand] PROHIBITED_CONTENT，裁剪第${panelIndex}格单独重试...`);
-    try {
-      const cropped = await cropPanelFromSheet(base64Data, panelIndex);
-      const croppedPrompt =
-        `附件是一张电影场景截图。请根据这张图片，生成一张 16:9 高分辨率大图。\n\n` +
-        `【要求】\n` +
-        `1. 构图、场景、人物姿态、服装、照明必须与附件图片完全一致。\n` +
-        `2. 输出一张 16:9 高清图片，画质清晰细腻，保持原图的风格与色调。`;
-      if (options?.characterReferenceImage && options?.ethnicity) {
-        // 仅加简短参考图说明
-      }
-      if (options?.auxiliaryPrompt?.trim()) {
-        // 保留用户补充要求
-      }
+    console.log(`[expand] PROHIBITED_CONTENT，使用简化提示词重试...`);
+    const simplifiedPrompt =
+      `附件是一张电影场景截图。请根据这张图片，完全重新渲染生成一张 16:9 高分辨率大图。\n\n` +
+      `【要求】\n` +
+      `1. 这是完整的高清重新渲染，不是放大。请生成全新的高清细节。\n` +
+      `2. 构图、场景、人物姿态、服装、照明必须与附件图片完全一致。\n` +
+      `3. 输出一张 16:9 高清图片，画质清晰细腻，保持原图的风格与色调。`;
 
-      const croppedContents: typeof contents = [
-        { text: croppedPrompt },
-        { inlineData: { mimeType: cropped.mimeType, data: cropped.data } },
-      ];
-      // 如果有参考图，也加上（已压缩过）
-      if (hasRef) {
-        const parsed = parseDataUrl(options!.characterReferenceImage!);
-        if (isValidBase64(parsed.data)) {
-          const compressed = await compressReferenceImage(parsed.data, parsed.mimeType);
-          croppedContents.push({ inlineData: { mimeType: compressed.mimeType, data: compressed.data } });
-        }
+    const simplifiedContents: typeof contents = [
+      { text: simplifiedPrompt },
+      { inlineData: { mimeType: panelImageMime, data: panelImageData } },
+    ];
+    // 如果有参考图，也加上（已压缩过）
+    if (hasRef) {
+      const parsed = parseDataUrl(options!.characterReferenceImage!);
+      if (isValidBase64(parsed.data)) {
+        const compressed = await compressReferenceImage(parsed.data, parsed.mimeType);
+        simplifiedContents.push({ inlineData: { mimeType: compressed.mimeType, data: compressed.data } });
       }
-      const croppedContentsNoRef: typeof contents = [
-        { text: croppedPrompt },
-        { inlineData: { mimeType: cropped.mimeType, data: cropped.data } },
-      ];
+    }
+    const simplifiedContentsNoRef: typeof contents = [
+      { text: simplifiedPrompt },
+      { inlineData: { mimeType: panelImageMime, data: panelImageData } },
+    ];
 
-      for (const modelId of modelIds) {
-        try {
-          console.log(`[expand] 裁剪后重试模型: ${modelId}`);
-          const result = await callGeminiImage(ai, modelId, croppedContents, '16:9');
-          if (result) return result;
-        } catch (e) {
-          console.warn(`[expand] 裁剪后模型 ${modelId} 失败:`, e instanceof Error ? e.message : e);
-          lastError = e;
-          if (isProhibitedContent(e) && hasRef) {
-            // 裁剪图 + 参考图仍被过滤 → 去掉参考图
-            try {
-              console.log(`[expand] 裁剪后去掉参考图重试 ${modelId}...`);
-              const result = await callGeminiImage(ai, modelId, croppedContentsNoRef, '16:9');
-              if (result) return result;
-            } catch (e2) {
-              console.warn(`[expand] 裁剪后去掉参考图仍失败:`, e2 instanceof Error ? e2.message : e2);
-              lastError = e2;
-            }
+    for (const modelId of modelIds) {
+      try {
+        console.log(`[expand] 简化提示词重试模型: ${modelId}`);
+        const result = await callGeminiImage(ai, modelId, simplifiedContents, '16:9');
+        if (result) return result;
+      } catch (e) {
+        console.warn(`[expand] 简化提示词模型 ${modelId} 失败:`, e instanceof Error ? e.message : e);
+        lastError = e;
+        if (isProhibitedContent(e) && hasRef) {
+          // 仍被过滤 → 去掉参考图
+          try {
+            console.log(`[expand] 简化提示词去掉参考图重试 ${modelId}...`);
+            const result = await callGeminiImage(ai, modelId, simplifiedContentsNoRef, '16:9');
+            if (result) return result;
+          } catch (e2) {
+            console.warn(`[expand] 简化提示词去掉参考图仍失败:`, e2 instanceof Error ? e2.message : e2);
+            lastError = e2;
           }
-          if (is400Error(e)) break;
         }
+        if (is400Error(e)) break;
       }
-    } catch (cropErr) {
-      console.warn('[expand] 裁剪失败:', cropErr instanceof Error ? cropErr.message : cropErr);
     }
   }
 

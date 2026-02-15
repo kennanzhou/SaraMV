@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useRef } from 'react';
-import { Film, X, RefreshCw, User, Upload } from 'lucide-react';
+import { Film, X, RefreshCw, User, Upload, Sparkles } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import { useShallow } from 'zustand/react/shallow';
 import ErrorToast from './ErrorToast';
@@ -71,6 +71,9 @@ export default function Module3Storyboard() {
     setStudioSceneImage,
     characterDescription,
     setCharacterDescription,
+    faceSwappedImages,
+    addFaceSwappedImage,
+    step3OutputBaseDir,
   } = useAppStore(
     useShallow((s) => ({
       uploadedImage: s.uploadedImage,
@@ -96,6 +99,9 @@ export default function Module3Storyboard() {
       setStudioSceneImage: s.setStudioSceneImage,
       characterDescription: s.characterDescription,
       setCharacterDescription: s.setCharacterDescription,
+      faceSwappedImages: s.faceSwappedImages,
+      addFaceSwappedImage: s.addFaceSwappedImage,
+      step3OutputBaseDir: s.step3OutputBaseDir,
     }))
   );
 
@@ -169,10 +175,42 @@ export default function Module3Storyboard() {
   const [studioUserScene, setStudioUserScene] = useState('');
   const [studioSceneLoading, setStudioSceneLoading] = useState(false);
   const [charDescLoading, setCharDescLoading] = useState(false);
+  const [faceSwapLoadingUrl, setFaceSwapLoadingUrl] = useState<string | null>(null);
   // studioSceneImage 已迁移到 store 中，此处不再使用 useState
 
   const keywordId = selectedKeyword?.id ?? '';
   const coreWord = (imageContext || '').trim().slice(0, 30) || 'scene';
+
+  const handleFaceSwap = async (imageUrl: string, label: string) => {
+    const refImage = effectiveCharacterRefImage;
+    if (!refImage) {
+      setErrorMessage('请先上传人物参考图');
+      return;
+    }
+    setFaceSwapLoadingUrl(imageUrl);
+    try {
+      const res = await fetch('/api/face-swap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceImage: imageUrl,
+          referenceImage: refImage,
+          characterDescription: characterDescription || undefined,
+          step3OutputBaseDir: step3OutputBaseDir ?? undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || '洗脸失败');
+      if (data.imageUrl) {
+        addFaceSwappedImage(imageUrl, data.imageUrl, `${label}（洗脸）`);
+      }
+    } catch (e) {
+      console.error(e);
+      setErrorMessage(e instanceof Error ? e.message : '洗脸生成失败，请重试');
+    } finally {
+      setFaceSwapLoadingUrl(null);
+    }
+  };
 
   const handleGenerateScenePrompts = async () => {
     if (!uploadedImage) {
@@ -403,7 +441,7 @@ export default function Module3Storyboard() {
     return list;
   }, [scenePrompts, desireScenePrompts]);
 
-  const isGenerating = scenePromptsLoading || desirePromptsLoading || loadingImageId !== null || studioSceneLoading;
+  const isGenerating = scenePromptsLoading || desirePromptsLoading || loadingImageId !== null || studioSceneLoading || faceSwapLoadingUrl !== null;
 
   return (
     <div className="flex h-[calc(100vh-6rem)] min-h-[500px] gap-4 -m-2 p-0 relative">
@@ -412,7 +450,7 @@ export default function Module3Storyboard() {
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm" aria-hidden>
           <div className="flex flex-col items-center gap-4 text-[var(--foreground)]">
             <RefreshCw size={48} className="animate-spin text-[var(--accent)]" />
-            <p className="text-sm">生成中，请勿操作...</p>
+            <p className="text-sm">{faceSwapLoadingUrl ? '洗脸生成中，请勿操作...' : '生成中，请勿操作...'}</p>
           </div>
         </div>
       )}
@@ -548,33 +586,88 @@ export default function Module3Storyboard() {
           )}
 
           {studioSceneImage && (
-            <button
-              type="button"
-              className="block w-full rounded-lg overflow-hidden border border-[var(--border)] bg-[var(--background-tertiary)] hover:ring-2 hover:ring-[var(--accent)] hover:ring-inset transition-shadow text-left"
-              onClick={() => setPreviewImage({ src: studioSceneImage, alt: '录音棚场景' })}
-            >
-              <div className="aspect-video">
-                <img src={studioSceneImage} alt="录音棚场景" className="w-full h-full object-cover" />
+            <div className="space-y-1">
+              <div className="rounded-lg overflow-hidden border border-[var(--border)] bg-[var(--background-tertiary)]">
+                <div className="relative aspect-video group">
+                  <div className="w-full h-full cursor-pointer" onClick={() => setPreviewImage({ src: studioSceneImage, alt: '录音棚场景' })}>
+                    <img src={studioSceneImage} alt="录音棚场景" className="w-full h-full object-cover" />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); handleFaceSwap(studioSceneImage, '录音棚场景'); }}
+                    disabled={faceSwapLoadingUrl !== null}
+                    className="absolute bottom-1.5 right-1.5 p-1.5 rounded-lg bg-purple-600/80 hover:bg-purple-500 text-white transition-colors disabled:opacity-50"
+                    title="洗脸"
+                  >
+                    {faceSwapLoadingUrl === studioSceneImage ? <RefreshCw size={12} className="animate-spin" /> : <Sparkles size={15} />}
+                  </button>
+                </div>
+                <span className="block text-xs text-[var(--foreground-muted)] px-2 py-1">录音棚模式场景</span>
               </div>
-              <span className="block text-xs text-[var(--foreground-muted)] px-2 py-1">录音棚模式场景</span>
-            </button>
+              {faceSwappedImages.filter((f) => f.sourceUrl === studioSceneImage).map((f) => (
+                <div key={f.id} className="rounded-lg overflow-hidden border border-purple-500/40 bg-[var(--background-tertiary)] ml-2">
+                  <div className="relative aspect-video group">
+                    <div className="w-full h-full cursor-pointer" onClick={() => setPreviewImage({ src: f.swappedUrl, alt: f.label })}>
+                      <img src={f.swappedUrl} alt={f.label} className="w-full h-full object-cover" />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); handleFaceSwap(f.swappedUrl, f.label); }}
+                      disabled={faceSwapLoadingUrl !== null}
+                      className="absolute bottom-1.5 right-1.5 p-1.5 rounded-lg bg-purple-600/80 hover:bg-purple-500 text-white transition-colors disabled:opacity-50"
+                      title="洗脸"
+                    >
+                      {faceSwapLoadingUrl === f.swappedUrl ? <RefreshCw size={12} className="animate-spin" /> : <Sparkles size={15} />}
+                    </button>
+                  </div>
+                  <span className="block text-xs text-purple-400 px-2 py-1">{f.label}</span>
+                </div>
+              ))}
+            </div>
           )}
 
           {allGeneratedImages.length === 0 && !studioSceneImage ? (
             <p className="text-sm text-[var(--foreground-muted)] py-4">暂无生成图片</p>
           ) : allGeneratedImages.length > 0 ? (
             allGeneratedImages.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className="block w-full rounded-lg overflow-hidden border border-[var(--border)] bg-[var(--background-tertiary)] hover:ring-2 hover:ring-[var(--accent)] hover:ring-inset transition-shadow text-left"
-                onClick={() => setPreviewImage({ src: item.url, alt: item.label })}
-              >
-                <div className="aspect-video">
-                  <img src={item.url} alt={item.label} className="w-full h-full object-cover" />
+              <div key={item.id} className="space-y-1">
+                <div className="rounded-lg overflow-hidden border border-[var(--border)] bg-[var(--background-tertiary)]">
+                  <div className="relative aspect-video group">
+                    <div className="w-full h-full cursor-pointer" onClick={() => setPreviewImage({ src: item.url, alt: item.label })}>
+                      <img src={item.url} alt={item.label} className="w-full h-full object-cover" />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); handleFaceSwap(item.url, item.label); }}
+                      disabled={faceSwapLoadingUrl !== null}
+                      className="absolute bottom-1.5 right-1.5 p-1.5 rounded-lg bg-purple-600/80 hover:bg-purple-500 text-white transition-colors disabled:opacity-50"
+                      title="洗脸"
+                    >
+                      {faceSwapLoadingUrl === item.url ? <RefreshCw size={12} className="animate-spin" /> : <Sparkles size={15} />}
+                    </button>
+                  </div>
+                  <span className="block text-xs text-[var(--foreground-muted)] px-2 py-1">{item.label}</span>
                 </div>
-                <span className="block text-xs text-[var(--foreground-muted)] px-2 py-1">{item.label}</span>
-              </button>
+                {faceSwappedImages.filter((f) => f.sourceUrl === item.url).map((f) => (
+                  <div key={f.id} className="rounded-lg overflow-hidden border border-purple-500/40 bg-[var(--background-tertiary)] ml-2">
+                    <div className="relative aspect-video group">
+                      <div className="w-full h-full cursor-pointer" onClick={() => setPreviewImage({ src: f.swappedUrl, alt: f.label })}>
+                        <img src={f.swappedUrl} alt={f.label} className="w-full h-full object-cover" />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleFaceSwap(f.swappedUrl, f.label); }}
+                        disabled={faceSwapLoadingUrl !== null}
+                        className="absolute bottom-1.5 right-1.5 p-1.5 rounded-lg bg-purple-600/80 hover:bg-purple-500 text-white transition-colors disabled:opacity-50"
+                        title="洗脸"
+                      >
+                        {faceSwapLoadingUrl === f.swappedUrl ? <RefreshCw size={12} className="animate-spin" /> : <Sparkles size={15} />}
+                      </button>
+                    </div>
+                    <span className="block text-xs text-purple-400 px-2 py-1">{f.label}</span>
+                  </div>
+                ))}
+              </div>
             ))
           ) : null}
         </div>

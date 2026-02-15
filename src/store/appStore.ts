@@ -89,6 +89,9 @@ export interface AppState {
     }>;
   }>;
 
+  // 洗脸图片：按原图 URL 索引，每张原图可有多张洗脸结果
+  faceSwappedImages: Array<{ id: string; sourceUrl: string; swappedUrl: string; label: string }>;
+
   // Module 6: 已生成视频列表
   generatedVideos: Array<{
     videoUrl: string;
@@ -129,6 +132,7 @@ export interface AppState {
   addStep4Panel2K: (sourceId: string, contactImageUrl: string, panelIndex: number, imageUrl: string) => void;
   /** 将 2K 大图作为新来源加入左侧栏，便于以其为基础继续生九宫格 */
   addStep4GroupSource: (sourceId: string, sourceLabel: string, sourceImageUrl: string) => void;
+  addFaceSwappedImage: (sourceUrl: string, swappedUrl: string, label: string) => void;
   addGeneratedVideo: (video: { videoUrl: string; savedPath?: string; sourceLabel: string }) => void;
   resetModule1: () => void;
 }
@@ -172,6 +176,9 @@ export const useAppStore = create<AppState>((set) => ({
   // Module 4
   ethnicityOption: '亚洲女性',
   step4Groups: [],
+
+  // 洗脸图片
+  faceSwappedImages: [],
 
   // Module 6
   generatedVideos: [],
@@ -248,6 +255,12 @@ export const useAppStore = create<AppState>((set) => ({
       step4Groups: [...state.step4Groups, { sourceId, sourceLabel, sourceImageUrl, sheets: [] }],
     };
   }),
+  addFaceSwappedImage: (sourceUrl, swappedUrl, label) => set((state) => ({
+    faceSwappedImages: [
+      ...state.faceSwappedImages,
+      { id: `fs-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, sourceUrl, swappedUrl, label },
+    ],
+  })),
   addGeneratedVideo: (video) => set((state) => ({
     generatedVideos: [...state.generatedVideos, { ...video, createdAt: new Date().toISOString() }],
   })),

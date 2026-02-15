@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useRef } from 'react';
-import { Video, LayoutGrid, X, Upload, User, RefreshCw } from 'lucide-react';
+import { Video, LayoutGrid, X, Upload, User, RefreshCw, Sparkles } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import { useShallow } from 'zustand/react/shallow';
 import ErrorToast from './ErrorToast';
@@ -71,6 +71,8 @@ export default function Module4Video() {
     studioSceneImage,
     characterDescription,
     setCharacterDescription,
+    faceSwappedImages,
+    addFaceSwappedImage,
   } = useAppStore(
     useShallow((s) => ({
       uploadedImage: s.uploadedImage,
@@ -89,6 +91,8 @@ export default function Module4Video() {
       studioSceneImage: s.studioSceneImage,
       characterDescription: s.characterDescription,
       setCharacterDescription: s.setCharacterDescription,
+      faceSwappedImages: s.faceSwappedImages,
+      addFaceSwappedImage: s.addFaceSwappedImage,
     }))
   );
 
@@ -105,10 +109,46 @@ export default function Module4Video() {
   /** 每格的生图选项：是否采用参考图、分辨率、辅助提示词 */
   const [panelOptions, setPanelOptions] = useState<Record<number, { useRef: boolean; resolution: '2K' | '4K'; auxiliaryPrompt: string }>>(() => {
     const o: Record<number, { useRef: boolean; resolution: '2K' | '4K'; auxiliaryPrompt: string }> = {};
-    for (let i = 1; i <= 9; i++) o[i] = { useRef: true, resolution: '2K', auxiliaryPrompt: '' };
+    for (let i = 1; i <= 9; i++) o[i] = { useRef: true, resolution: '4K', auxiliaryPrompt: '' };
     return o;
   });
   const [charDescLoading, setCharDescLoading] = useState(false);
+  const [faceSwapLoadingUrl, setFaceSwapLoadingUrl] = useState<string | null>(null);
+
+  const handleFaceSwap = async (imageUrl: string, label: string, sourceId: string) => {
+    const refImage = effectiveCharacterRefImage;
+    if (!refImage) {
+      setErrorMessage('请先上传人物参考图');
+      return;
+    }
+    setFaceSwapLoadingUrl(imageUrl);
+    try {
+      const res = await fetch('/api/face-swap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceImage: imageUrl,
+          referenceImage: refImage,
+          characterDescription: characterDescription || undefined,
+          step3OutputBaseDir: step3OutputBaseDir ?? undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || '洗脸失败');
+      if (data.imageUrl) {
+        const swapLabel = `${label}（洗脸）`;
+        addFaceSwappedImage(imageUrl, data.imageUrl, swapLabel);
+        // 同时作为新来源加入左侧栏，继承九宫格等按钮
+        addStep4GroupSource(`fs-${sourceId}-${Date.now()}`, swapLabel, data.imageUrl);
+      }
+    } catch (e) {
+      console.error(e);
+      setErrorMessage(e instanceof Error ? e.message : '洗脸生成失败，请重试');
+    } finally {
+      setFaceSwapLoadingUrl(null);
+    }
+  };
+
   /** 人物参考图：null 表示使用第一步上传的参考图（uploadedImage），非 null 表示用户上传的其它参考图 */
   const [characterRefImage, setCharacterRefImage] = useState<string | null>(null);
   const characterRefInputRef = useRef<HTMLInputElement>(null);
@@ -258,7 +298,7 @@ export default function Module4Video() {
     );
   }
 
-  const isGenerating = gridLoading || expandingPanel !== null;
+  const isGenerating = gridLoading || expandingPanel !== null || faceSwapLoadingUrl !== null;
 
   return (
     <div className="flex h-[calc(100vh-6rem)] min-h-[400px] gap-4 -m-2 p-0 relative">
@@ -267,7 +307,7 @@ export default function Module4Video() {
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm" aria-hidden>
           <div className="flex flex-col items-center gap-4 text-[var(--foreground)]">
             <RefreshCw size={48} className="animate-spin text-[var(--accent)]" />
-            <p className="text-sm">生成中，请勿操作...</p>
+            <p className="text-sm">{faceSwapLoadingUrl ? '洗脸生成中，请勿操作...' : '生成中，请勿操作...'}</p>
           </div>
         </div>
       )}
@@ -330,13 +370,36 @@ export default function Module4Video() {
             />
             {effectiveCharacterRefImage ? (
               <div className="space-y-2">
-                <button
-                  type="button"
-                  className="block w-full rounded overflow-hidden border border-[var(--border)] hover:ring-2 hover:ring-[var(--accent)]"
-                  onClick={() => setPreviewImage({ src: effectiveCharacterRefImage, alt: '人物参考图' })}
-                >
-                  <img src={effectiveCharacterRefImage} alt="人物参考" className="w-full aspect-[3/4] object-cover" />
-                </button>
+                <div className="rounded overflow-hidden border border-[var(--border)] bg-[var(--background-tertiary)]">
+                  <div className="relative group">
+                    <div
+                      className="w-full cursor-pointer hover:ring-2 hover:ring-[var(--accent)] hover:ring-inset transition-shadow"
+                      onClick={() => setPreviewImage({ src: effectiveCharacterRefImage, alt: '人物参考图' })}
+                    >
+                      <img src={effectiveCharacterRefImage} alt="人物参考" className="w-full aspect-[3/4] object-cover" />
+                    </div>
+                    <div className="absolute bottom-1.5 right-1.5 flex gap-1">
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleGenerateGrid('ref-char', effectiveCharacterRefImage, '参考图', 'normal'); }}
+                        disabled={gridLoading}
+                        className="p-1.5 rounded-lg bg-black/60 hover:bg-[var(--accent)] text-white transition-colors disabled:opacity-50"
+                        title="九宫格（16:9 接触表）"
+                      >
+                        <LayoutGrid size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleGenerateGrid('ref-char', effectiveCharacterRefImage, '参考图', 'closeup'); }}
+                        disabled={gridLoading}
+                        className="p-1.5 rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white transition-colors disabled:opacity-50"
+                        title="特写九宫格"
+                      >
+                        <LayoutGrid size={15} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
                 <p className="text-[10px] text-[var(--foreground-muted)]">
                   {characterRefImage ? '已上传其它参考图' : '默认：第一步参考图'}
                 </p>
@@ -431,7 +494,7 @@ export default function Module4Video() {
           )}
 
           {/* 第三步场景图 + 2K 图（均带九宫格 / 特写九宫格），及接触表列表 */}
-          {step3Images.length === 0 && step4Groups.filter((g) => g.sourceId.startsWith('2k-')).length === 0 ? (
+          {step3Images.length === 0 && step4Groups.filter((g) => g.sourceId.startsWith('2k-') || g.sourceId.startsWith('fs-')).length === 0 ? (
             <p className="text-sm text-[var(--foreground-muted)] py-4">
               暂无图片，请先在第三步生成空场景或场景图
             </p>
@@ -452,27 +515,36 @@ export default function Module4Video() {
                         >
                           <img src={item.url} alt={item.label} className="w-full h-full object-cover pointer-events-none" />
                         </div>
-                        <div className="absolute bottom-2 right-2 flex gap-1">
+                        <div className="absolute bottom-1.5 right-1.5 flex gap-1">
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); handleFaceSwap(item.url, item.label, item.id); }}
+                            disabled={faceSwapLoadingUrl !== null || gridLoading}
+                            className="p-1.5 rounded-lg bg-purple-600/80 hover:bg-purple-500 text-white transition-colors disabled:opacity-50"
+                            title="洗脸"
+                          >
+                            {faceSwapLoadingUrl === item.url ? <RefreshCw size={14} className="animate-spin" /> : <Sparkles size={15} />}
+                          </button>
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); handleGenerateGrid(item.id, item.url, item.label, 'normal'); }}
                             disabled={gridLoading}
-                            className="p-2 rounded-lg bg-black/60 hover:bg-[var(--accent)] text-white transition-colors disabled:opacity-50"
+                            className="p-1.5 rounded-lg bg-black/60 hover:bg-[var(--accent)] text-white transition-colors disabled:opacity-50"
                             title="九宫格（16:9 接触表）"
                           >
-                            <LayoutGrid size={18} />
+                            <LayoutGrid size={15} />
                           </button>
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); handleGenerateGrid(item.id, item.url, item.label, 'closeup'); }}
                             disabled={gridLoading}
-                            className="p-2 rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white transition-colors disabled:opacity-50"
+                            className="p-1.5 rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white transition-colors disabled:opacity-50"
                             title="特写九宫格"
                           >
-                            <LayoutGrid size={18} />
+                            <LayoutGrid size={15} />
                           </button>
                         </div>
-                        <span className="absolute bottom-2 left-2 text-xs text-white/90 bg-black/50 px-2 py-0.5 rounded">
+                        <span className="absolute bottom-1.5 left-1.5 text-[10px] text-white/90 bg-black/50 px-1.5 py-0.5 rounded">
                           {item.label}
                         </span>
                       </div>
@@ -496,9 +568,9 @@ export default function Module4Video() {
                   </div>
                 );
               })}
-              {/* 2K 图作为来源（由 addStep4GroupSource 添加），显示在左侧栏，带九宫格 / 特写九宫格 */}
-              {step4Groups.filter((g) => g.sourceId.startsWith('2k-')).map((g) => (
-                <div key={g.sourceId} className="rounded-lg overflow-hidden border border-[var(--border)] bg-[var(--background-tertiary)]">
+              {/* 2K 图 / 洗脸图作为来源（由 addStep4GroupSource 添加），显示在左侧栏，带九宫格 / 特写九宫格 / 洗脸 */}
+              {step4Groups.filter((g) => g.sourceId.startsWith('2k-') || g.sourceId.startsWith('fs-')).map((g) => (
+                <div key={g.sourceId} className={`rounded-lg overflow-hidden border ${g.sourceId.startsWith('fs-') ? 'border-purple-500/40' : 'border-[var(--border)]'} bg-[var(--background-tertiary)]`}>
                   <div className="relative aspect-video group">
                     <div
                       className="w-full h-full cursor-pointer hover:ring-2 hover:ring-[var(--accent)] hover:ring-inset transition-shadow"
@@ -508,27 +580,36 @@ export default function Module4Video() {
                     >
                       <img src={g.sourceImageUrl} alt={g.sourceLabel} className="w-full h-full object-cover pointer-events-none" />
                     </div>
-                    <div className="absolute bottom-2 right-2 flex gap-1">
+                    <div className="absolute bottom-1.5 right-1.5 flex gap-1">
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleFaceSwap(g.sourceImageUrl, g.sourceLabel, g.sourceId); }}
+                        disabled={faceSwapLoadingUrl !== null || gridLoading}
+                        className="p-1.5 rounded-lg bg-purple-600/80 hover:bg-purple-500 text-white transition-colors disabled:opacity-50"
+                        title="洗脸"
+                      >
+                        {faceSwapLoadingUrl === g.sourceImageUrl ? <RefreshCw size={14} className="animate-spin" /> : <Sparkles size={15} />}
+                      </button>
                       <button
                         type="button"
                         onClick={(e) => { e.stopPropagation(); handleGenerateGrid(g.sourceId, g.sourceImageUrl, g.sourceLabel, 'normal'); }}
                         disabled={gridLoading}
-                        className="p-2 rounded-lg bg-black/60 hover:bg-[var(--accent)] text-white transition-colors disabled:opacity-50"
+                        className="p-1.5 rounded-lg bg-black/60 hover:bg-[var(--accent)] text-white transition-colors disabled:opacity-50"
                         title="九宫格"
                       >
-                        <LayoutGrid size={18} />
+                        <LayoutGrid size={15} />
                       </button>
                       <button
                         type="button"
                         onClick={(e) => { e.stopPropagation(); handleGenerateGrid(g.sourceId, g.sourceImageUrl, g.sourceLabel, 'closeup'); }}
                         disabled={gridLoading}
-                        className="p-2 rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white transition-colors disabled:opacity-50"
+                        className="p-1.5 rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white transition-colors disabled:opacity-50"
                         title="特写九宫格"
                       >
-                        <LayoutGrid size={18} />
+                        <LayoutGrid size={15} />
                       </button>
                     </div>
-                    <span className="absolute bottom-2 left-2 text-xs text-white/90 bg-black/50 px-2 py-0.5 rounded truncate max-w-[70%]">
+                    <span className="absolute bottom-1.5 left-1.5 text-[10px] text-white/90 bg-black/50 px-1.5 py-0.5 rounded truncate max-w-[70%]">
                       {g.sourceLabel}
                     </span>
                   </div>

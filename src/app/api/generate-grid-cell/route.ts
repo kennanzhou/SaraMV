@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
       characterReferenceImage,
       ethnicity,
       step3OutputBaseDir,
-      resolution = '2K',
+      resolution = '4K',
       auxiliaryPrompt,
       characterDescription,
     } = await request.json();
@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
       options.characterReferenceImage = characterReferenceImage;
     }
     if (ethnicity) options.ethnicity = ethnicity;
-    if (resolution === '4K') options.imageSize = '4K';
+    options.imageSize = resolution === '2K' ? '2K' : '4K';
     if (typeof auxiliaryPrompt === 'string' && auxiliaryPrompt.trim()) options.auxiliaryPrompt = auxiliaryPrompt.trim();
     if (typeof characterDescription === 'string' && characterDescription.trim()) options.characterDescription = characterDescription.trim();
     const imageUrl = await expandPanelTo2K(image, cell, Object.keys(options).length ? options : undefined);
@@ -63,12 +63,14 @@ export async function POST(request: NextRequest) {
       const base = path.resolve(process.cwd(), step3OutputBaseDir.trim());
       const dir = path.join(base, 'IMAGE');
       await mkdir(dir, { recursive: true });
-      const filepath = path.join(dir, `panel_${num}_2K_${timestamp}.${ext}`);
+      const sizeTag = options.imageSize === '2K' ? '2K' : '4K';
+      const filepath = path.join(dir, `panel_${num}_${sizeTag}_${timestamp}.${ext}`);
       await writeFile(filepath, Buffer.from(base64, 'base64'));
       savedPath = path.relative(process.cwd(), filepath);
     } else if (typeof saveDir === 'string' && saveDir.trim()) {
       const dir = path.resolve(process.cwd(), saveDir.trim());
-      const filepath = path.join(dir, `panel_${num}_2K.${ext}`);
+      const sizeTag = options.imageSize === '2K' ? '2K' : '4K';
+      const filepath = path.join(dir, `panel_${num}_${sizeTag}.${ext}`);
       await writeFile(filepath, Buffer.from(base64, 'base64'));
       savedPath = path.relative(process.cwd(), filepath);
     }
