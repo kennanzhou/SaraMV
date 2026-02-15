@@ -20,6 +20,7 @@ export async function POST(request: NextRequest) {
       step3OutputBaseDir,
       resolution = '2K',
       auxiliaryPrompt,
+      characterDescription,
     } = await request.json();
 
     if (!image || typeof image !== 'string') {
@@ -44,6 +45,7 @@ export async function POST(request: NextRequest) {
     if (ethnicity) options.ethnicity = ethnicity;
     if (resolution === '4K') options.imageSize = '4K';
     if (typeof auxiliaryPrompt === 'string' && auxiliaryPrompt.trim()) options.auxiliaryPrompt = auxiliaryPrompt.trim();
+    if (typeof characterDescription === 'string' && characterDescription.trim()) options.characterDescription = characterDescription.trim();
     const imageUrl = await expandPanelTo2K(image, cell, Object.keys(options).length ? options : undefined);
     if (!imageUrl) {
       return NextResponse.json(

@@ -20,7 +20,7 @@ const GRID_OUTPUT_DIR = path.join(process.cwd(), 'output', 'grid');
  */
 export async function POST(request: NextRequest) {
   try {
-    let body: { image?: string; characterReferenceImage?: string; ethnicity?: string; step3OutputBaseDir?: string; type?: 'normal' | 'closeup' };
+    let body: { image?: string; characterReferenceImage?: string; ethnicity?: string; step3OutputBaseDir?: string; type?: 'normal' | 'closeup'; characterDescription?: string };
     try {
       body = await request.json();
     } catch (parseErr) {
@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
         { status: 413 }
       );
     }
-    const { image, characterReferenceImage, ethnicity, step3OutputBaseDir, type: gridType } = body;
+    const { image, characterReferenceImage, ethnicity, step3OutputBaseDir, type: gridType, characterDescription } = body;
 
     if (!image || typeof image !== 'string') {
       return NextResponse.json(
@@ -50,8 +50,8 @@ export async function POST(request: NextRequest) {
           : {}),
       },
       characterReferenceImage && ethnicity && isValidEthnicity(ethnicity)
-        ? { characterReferenceImage, ethnicity }
-        : undefined
+        ? { characterReferenceImage, ethnicity, characterDescription }
+        : characterDescription ? { characterDescription } : undefined
     );
     if (!imageUrl) {
       const detail = getLastGridContactSheetError();

@@ -19,6 +19,7 @@
     "proxy-agent": "^6.5.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "sharp": "^0.34.5",
     "zustand": "^5.0.11"
   },
   "devDependencies": {

@@ -13,7 +13,7 @@ const SCENE_OUTPUT_BASE = path.join(process.cwd(), 'output', 'scene');
  */
 export async function POST(request: NextRequest) {
   try {
-    let body: { prompt?: string; referenceImage?: string; keywordId?: string; coreWord?: string; filename?: string };
+    let body: { prompt?: string; referenceImage?: string; keywordId?: string; coreWord?: string; filename?: string; characterDescription?: string };
     try {
       body = await request.json();
     } catch (parseErr) {
@@ -22,12 +22,12 @@ export async function POST(request: NextRequest) {
         { status: 413 }
       );
     }
-    const { prompt, referenceImage, keywordId, coreWord, filename: givenFilename } = body;
+    const { prompt, referenceImage, keywordId, coreWord, filename: givenFilename, characterDescription } = body;
     if (!prompt || !referenceImage) {
       return NextResponse.json({ error: 'Missing prompt or referenceImage' }, { status: 400 });
     }
 
-    const imageDataUrl = await generateSceneImage(prompt, referenceImage);
+    const imageDataUrl = await generateSceneImage(prompt, referenceImage, characterDescription);
     if (!imageDataUrl) {
       const detail = getLastSceneImageError();
       const message = detail || '场景图生成失败，请检查 API Key 与提示词内容';

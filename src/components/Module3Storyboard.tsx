@@ -69,6 +69,8 @@ export default function Module3Storyboard() {
     finalSelectedVersion,
     studioSceneImage,
     setStudioSceneImage,
+    characterDescription,
+    setCharacterDescription,
   } = useAppStore(
     useShallow((s) => ({
       uploadedImage: s.uploadedImage,
@@ -92,6 +94,8 @@ export default function Module3Storyboard() {
       finalSelectedVersion: s.finalSelectedVersion,
       studioSceneImage: s.studioSceneImage,
       setStudioSceneImage: s.setStudioSceneImage,
+      characterDescription: s.characterDescription,
+      setCharacterDescription: s.setCharacterDescription,
     }))
   );
 
@@ -134,6 +138,7 @@ export default function Module3Storyboard() {
           keywordId,
           coreWord,
           filename: `studio_${studioMode}_${Date.now()}`,
+          characterDescription: characterDescription || undefined,
         }),
       });
       const data = await resImage.json().catch(() => ({}));
@@ -163,6 +168,7 @@ export default function Module3Storyboard() {
   const [studioMode, setStudioMode] = useState<1 | 2 | 3>(1);
   const [studioUserScene, setStudioUserScene] = useState('');
   const [studioSceneLoading, setStudioSceneLoading] = useState(false);
+  const [charDescLoading, setCharDescLoading] = useState(false);
   // studioSceneImage 已迁移到 store 中，此处不再使用 useState
 
   const keywordId = selectedKeyword?.id ?? '';
@@ -316,6 +322,7 @@ export default function Module3Storyboard() {
           keywordId,
           coreWord,
           filename: `scene_${String(index + 1).padStart(2, '0')}`,
+          characterDescription: characterDescription || undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -355,6 +362,7 @@ export default function Module3Storyboard() {
           keywordId,
           coreWord,
           filename: `desire_${String(index + 1).padStart(2, '0')}`,
+          characterDescription: characterDescription || undefined,
         }),
       });
       const data = await res.json();
@@ -481,6 +489,63 @@ export default function Module3Storyboard() {
               </button>
             )}
           </div>
+
+          {/* 人物特征描述输入框 */}
+          {effectiveCharacterRefImage && (
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--background-tertiary)] p-3 flex-shrink-0">
+              <h3 className="text-xs font-medium text-[var(--foreground-muted)] mb-2">
+                人物特征描述
+              </h3>
+              <p className="text-[10px] text-[var(--foreground-muted)] mb-2">
+                用于生成图片时保持人物一致性，可手动修改
+              </p>
+              <textarea
+                value={characterDescription}
+                onChange={(e) => setCharacterDescription(e.target.value)}
+                placeholder="点击下方按钮自动分析参考图中的人物特征，或手动输入..."
+                className="input-field w-full text-xs resize-y min-h-[100px] mb-2"
+              />
+              <button
+                type="button"
+                disabled={charDescLoading}
+                className="btn-secondary w-full flex items-center justify-center gap-1.5 text-xs"
+                onClick={async () => {
+                  const img = effectiveCharacterRefImage;
+                  if (!img) return;
+                  setCharDescLoading(true);
+                  try {
+                    const res = await fetch('/api/analyze-character', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ image: img }),
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.characterDescription) {
+                      setCharacterDescription(data.characterDescription);
+                    } else {
+                      setErrorMessage(data.error || '人物特征分析失败');
+                    }
+                  } catch {
+                    setErrorMessage('人物特征分析失败，请重试');
+                  } finally {
+                    setCharDescLoading(false);
+                  }
+                }}
+              >
+                {charDescLoading ? (
+                  <>
+                    <RefreshCw size={12} className="animate-spin" />
+                    分析中...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw size={12} />
+                    {characterDescription ? '重新分析人物特征' : '自动分析人物特征'}
+                  </>
+                )}
+              </button>
+            </div>
+          )}
 
           {studioSceneImage && (
             <button

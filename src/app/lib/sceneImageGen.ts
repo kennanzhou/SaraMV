@@ -4,7 +4,43 @@
 import { GoogleGenAI } from '@google/genai';
 import { readFile } from 'fs/promises';
 import path from 'path';
+import sharp from 'sharp';
 import { parseDataUrl, isValidBase64 } from './dataUrlUtils';
+
+/**
+ * 压缩参考图：将超大图片缩放到指定最大边长并转为 JPEG（质量 85），
+ * 避免超大 PNG 导致 API 503 超时。
+ */
+async function compressReferenceImage(
+  base64Data: string,
+  mimeType: string,
+  maxDimension = 1536,
+): Promise<{ data: string; mimeType: string }> {
+  const estimatedBytes = base64Data.length * 0.75;
+  if (estimatedBytes < 1.5 * 1024 * 1024) {
+    return { data: base64Data, mimeType };
+  }
+  try {
+    const inputBuffer = Buffer.from(base64Data, 'base64');
+    const image = sharp(inputBuffer);
+    const metadata = await image.metadata();
+    const w = metadata.width ?? 0;
+    const h = metadata.height ?? 0;
+    if (w <= maxDimension && h <= maxDimension && mimeType === 'image/jpeg' && estimatedBytes < 2 * 1024 * 1024) {
+      return { data: base64Data, mimeType };
+    }
+    const outputBuffer = await image
+      .resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+    const newBase64 = outputBuffer.toString('base64');
+    console.log(`[scene-compress] 参考图压缩: ${Math.round(estimatedBytes / 1024)}KB → ${Math.round(outputBuffer.length / 1024)}KB, ${w}x${h} → max${maxDimension}`);
+    return { data: newBase64, mimeType: 'image/jpeg' };
+  } catch (err) {
+    console.warn('[scene-compress] 压缩失败，使用原图:', err instanceof Error ? err.message : err);
+    return { data: base64Data, mimeType };
+  }
+}
 
 async function getApiKey(): Promise<string> {
   try {
@@ -30,7 +66,8 @@ export function getLastSceneImageError(): string | null {
  */
 export async function generateSceneImage(
   prompt: string,
-  referenceImageDataUrl: string
+  referenceImageDataUrl: string,
+  characterDescription?: string
 ): Promise<string | null> {
   lastSceneImageError = null;
   const apiKey = await getApiKey();
@@ -39,21 +76,34 @@ export async function generateSceneImage(
     return null;
   }
 
-  const { data: base64Data, mimeType } = parseDataUrl(referenceImageDataUrl);
-  if (!isValidBase64(base64Data)) {
+  const parsed = parseDataUrl(referenceImageDataUrl);
+  if (!isValidBase64(parsed.data)) {
     lastSceneImageError = '参考图片数据无效，请重新上传';
     return null;
   }
+  // 压缩参考图，避免超大 PNG 导致 API 503 超时
+  const { data: base64Data, mimeType } = await compressReferenceImage(parsed.data, parsed.mimeType);
   console.log(`[scene] 参考图 base64 长度: ${base64Data.length} (≈${Math.round(base64Data.length * 0.75 / 1024)}KB), mime: ${mimeType}`);
 
-  const fullPrompt =
+  let fullPrompt =
     `你是一位日本人像/场景摄影师，请根据以下提示词与参考图生成一张 16:9 的电影感场景图。\n\n` +
     `【要求】\n` +
     `- 人物面部与身体特征必须与参考图完全一致。\n` +
     `- 严格保持参考图的光影、色调与影像风格一致。\n` +
-    `- 构图：中景或近景。22岁的年轻亚洲女子的脸不要完全正对镜头，可以是微微侧脸或因情绪导致的抬头、低头；人物在画面中的位置不必在正中央，构图自然。\n\n` +
-    `【场景提示词】\n${prompt}\n\n` +
+    `- 构图：中景或近景。人物的脸不要完全正对镜头，可以是微微侧脸或因情绪导致的抬头、低头；人物在画面中的位置不必在正中央，构图自然。\n`;
+  if (characterDescription?.trim()) {
+    fullPrompt += `\n【人物特征限定】\n以下是参考图中人物的详细特征，生成的图片中人物必须严格符合这些特征：\n${characterDescription.trim()}\n`;
+  }
+  fullPrompt += `\n【场景提示词】\n${prompt}\n\n` +
     `请输出一张 16:9 的横图，保持电影感与风格统一。`;
+
+  /** 安全设置：将所有类别的过滤阈值设为 OFF，避免合法的艺术/摄影内容被误判 */
+  const safetySettings = [
+    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT' as const, threshold: 'OFF' as const },
+    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT' as const, threshold: 'OFF' as const },
+    { category: 'HARM_CATEGORY_HARASSMENT' as const, threshold: 'OFF' as const },
+    { category: 'HARM_CATEGORY_HATE_SPEECH' as const, threshold: 'OFF' as const },
+  ];
 
   const ai = new GoogleGenAI({ apiKey });
   const modelIds = ['gemini-3-pro-image-preview', 'gemini-2.5-flash-image'];
@@ -74,6 +124,7 @@ export async function generateSceneImage(
         config: {
           responseModalities: ['TEXT', 'IMAGE'] as string[],
           imageConfig: { aspectRatio: '16:9' },
+          safetySettings,
         },
       });
 
@@ -115,6 +166,7 @@ export async function generateSceneImage(
         config: {
           responseModalities: ['TEXT', 'IMAGE'] as string[],
           imageConfig: { aspectRatio: '16:9' },
+          safetySettings,
         },
       });
       const parts = response.candidates?.[0]?.content?.parts;
@@ -139,6 +191,7 @@ export async function generateSceneImage(
         config: {
           responseModalities: ['TEXT', 'IMAGE'] as string[],
           imageConfig: { aspectRatio: '16:9' },
+          safetySettings,
         },
       });
       const parts = response.candidates?.[0]?.content?.parts;

@@ -72,6 +72,9 @@ export interface AppState {
   /** 第三步录音棚模式生成的场景图（默认 2K），第四步可用来生九宫格 */
   studioSceneImage: string | null;
 
+  // 人物特征描述（由大模型分析参考图生成，用户可编辑，传入所有图片生成提示词）
+  characterDescription: string;
+
   // Module 4: 人种（与人物参考图一起用于九宫格/2K 强调面部），第五步提示词前缀
   ethnicityOption: '亚洲女性' | '欧美女性' | '亚洲男性' | '欧美男性';
   /** 第四步产出：按来源分组，每组含场景图、接触表列表、每张接触表对应的 2K 图（按生成顺序），切换步骤时保留 */
@@ -119,6 +122,7 @@ export interface AppState {
   setDesireScenePrompts: (prompts: Array<{ id: string; prompt: string; imageUrl: string | null; imageHistory?: string[] }>) => void;
   setStep3OutputBaseDir: (dir: string | null) => void;
   setStudioSceneImage: (image: string | null) => void;
+  setCharacterDescription: (v: string) => void;
   setEthnicityOption: (v: '亚洲女性' | '欧美女性' | '亚洲男性' | '欧美男性') => void;
   setStep4Groups: (groups: AppState['step4Groups']) => void;
   addStep4ContactSheet: (sourceId: string, sourceLabel: string, sourceImageUrl: string, contactImageUrl: string, savedDir: string) => void;
@@ -162,6 +166,9 @@ export const useAppStore = create<AppState>((set) => ({
   step3OutputBaseDir: null,
   studioSceneImage: null,
 
+  // 人物特征描述
+  characterDescription: '',
+
   // Module 4
   ethnicityOption: '亚洲女性',
   step4Groups: [],
@@ -202,6 +209,7 @@ export const useAppStore = create<AppState>((set) => ({
   setDesireScenePrompts: (prompts) => set({ desireScenePrompts: prompts }),
   setStep3OutputBaseDir: (dir) => set({ step3OutputBaseDir: dir }),
   setStudioSceneImage: (image) => set({ studioSceneImage: image }),
+  setCharacterDescription: (v) => set({ characterDescription: v }),
   setEthnicityOption: (v) => set({ ethnicityOption: v }),
   setStep4Groups: (groups) => set({ step4Groups: groups }),
   addStep4ContactSheet: (sourceId, sourceLabel, sourceImageUrl, contactImageUrl, savedDir) => set((state) => {

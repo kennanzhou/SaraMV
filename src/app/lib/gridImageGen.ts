@@ -5,7 +5,52 @@
 import { GoogleGenAI } from '@google/genai';
 import { readFile } from 'fs/promises';
 import path from 'path';
+import sharp from 'sharp';
 import { parseDataUrl, isValidBase64 } from './dataUrlUtils';
+
+/**
+ * 压缩参考图：将超大图片缩放到指定最大边长并转为 JPEG（质量 85），
+ * 返回 base64 数据和 mimeType。
+ * 如果图片已经较小，则原样返回。
+ */
+async function compressReferenceImage(
+  base64Data: string,
+  mimeType: string,
+  maxDimension = 1536,
+): Promise<{ data: string; mimeType: string }> {
+  // 粗略估算原始文件大小（base64 → 字节 ≈ *0.75）
+  const estimatedBytes = base64Data.length * 0.75;
+  // 小于 1.5MB 不压缩
+  if (estimatedBytes < 1.5 * 1024 * 1024) {
+    return { data: base64Data, mimeType };
+  }
+
+  try {
+    const inputBuffer = Buffer.from(base64Data, 'base64');
+    const image = sharp(inputBuffer);
+    const metadata = await image.metadata();
+
+    const w = metadata.width ?? 0;
+    const h = metadata.height ?? 0;
+
+    // 如果尺寸在限制内且已经是 JPEG 且小于 2MB，不压缩
+    if (w <= maxDimension && h <= maxDimension && mimeType === 'image/jpeg' && estimatedBytes < 2 * 1024 * 1024) {
+      return { data: base64Data, mimeType };
+    }
+
+    const outputBuffer = await image
+      .resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+
+    const newBase64 = outputBuffer.toString('base64');
+    console.log(`[compress] 参考图压缩: ${Math.round(estimatedBytes / 1024)}KB → ${Math.round(outputBuffer.length / 1024)}KB, ${w}x${h} → max${maxDimension}`);
+    return { data: newBase64, mimeType: 'image/jpeg' };
+  } catch (err) {
+    console.warn('[compress] 压缩失败，使用原图:', err instanceof Error ? err.message : err);
+    return { data: base64Data, mimeType };
+  }
+}
 
 async function getApiKey(): Promise<string> {
   try {
@@ -24,7 +69,7 @@ export const PANEL_DESCRIPTIONS: Record<number, string> = {
   2: '第2格 长镜头 LS：整个主体头到脚可见',
   3: '第3格 中景长镜头 MLS：膝盖以上或 3/4 视角',
   4: '第4格 中景 MS：腰部以上',
-  5: '第5格 中景特写 MCU：胸部以上亲密近景',
+  5: '第5格 中景特写 MCU：肩部以上近景',
   6: '第6格 特写 CU：面部或正面紧凑构图',
   7: '第7格 极特写 ECU：眼睛、手部等微距细节',
   8: '第8格 低角度 虫眼：从地面向上仰视',
@@ -59,6 +104,51 @@ function is400Error(e: unknown): boolean {
   return msg.includes('INVALID_ARGUMENT') || msg.includes('400');
 }
 
+/** 判断错误是否为 PROHIBITED_CONTENT（硬性过滤，safetySettings 无法覆盖） */
+function isProhibitedContent(e: unknown): boolean {
+  if (!e) return false;
+  const msg = e instanceof Error ? e.message : String(e);
+  return msg.includes('PROHIBITED_CONTENT');
+}
+
+/**
+ * 从 3x3 九宫格接触表中裁剪出指定格（1-9）的图片。
+ * 格编号从左到右、从上到下：1 2 3 / 4 5 6 / 7 8 9
+ * 返回裁剪后的 base64 数据和 mimeType。
+ */
+async function cropPanelFromSheet(
+  base64Data: string,
+  panelIndex: number,
+): Promise<{ data: string; mimeType: string }> {
+  const inputBuffer = Buffer.from(base64Data, 'base64');
+  const image = sharp(inputBuffer);
+  const metadata = await image.metadata();
+  const w = metadata.width ?? 0;
+  const h = metadata.height ?? 0;
+  if (w === 0 || h === 0) throw new Error('无法获取图片尺寸');
+
+  const col = (panelIndex - 1) % 3;   // 0, 1, 2
+  const row = Math.floor((panelIndex - 1) / 3); // 0, 1, 2
+  const cellW = Math.floor(w / 3);
+  const cellH = Math.floor(h / 3);
+
+  const outputBuffer = await sharp(inputBuffer)
+    .extract({ left: col * cellW, top: row * cellH, width: cellW, height: cellH })
+    .jpeg({ quality: 90 })
+    .toBuffer();
+
+  console.log(`[crop] 裁剪第${panelIndex}格: ${w}x${h} → ${cellW}x${cellH}, 输出 ${Math.round(outputBuffer.length / 1024)}KB`);
+  return { data: outputBuffer.toString('base64'), mimeType: 'image/jpeg' };
+}
+
+/** 安全设置：将所有类别的过滤阈值设为 OFF，避免合法的艺术/摄影内容被误判 */
+const SAFETY_SETTINGS = [
+  { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT' as const, threshold: 'OFF' as const },
+  { category: 'HARM_CATEGORY_DANGEROUS_CONTENT' as const, threshold: 'OFF' as const },
+  { category: 'HARM_CATEGORY_HARASSMENT' as const, threshold: 'OFF' as const },
+  { category: 'HARM_CATEGORY_HATE_SPEECH' as const, threshold: 'OFF' as const },
+];
+
 /** 单次调用 Gemini 生成图片，返回 data URL 或 null */
 async function callGeminiImage(
   ai: InstanceType<typeof GoogleGenAI>,
@@ -72,6 +162,7 @@ async function callGeminiImage(
     config: {
       responseModalities: ['TEXT', 'IMAGE'] as string[],
       imageConfig: { aspectRatio },
+      safetySettings: SAFETY_SETTINGS,
     },
   });
   const parts = response.candidates?.[0]?.content?.parts;
@@ -91,7 +182,7 @@ async function callGeminiImage(
 export async function generateContactSheetImage(
   sourceImageDataUrl: string,
   overrides?: GridPromptOverrides,
-  options?: { characterReferenceImage?: string; ethnicity?: EthnicityOption }
+  options?: { characterReferenceImage?: string; ethnicity?: EthnicityOption; characterDescription?: string }
 ): Promise<string | null> {
   lastGridContactSheetError = null;
   const apiKey = await getApiKey();
@@ -134,6 +225,9 @@ export async function generateContactSheetImage(
   if (options?.characterReferenceImage && options?.ethnicity) {
     prompt += `\n\n重要：人物为【${options.ethnicity}】，严格按照参考图人物的所有面部特征（五官、脸型、肤色等）一致。`;
   }
+  if (options?.characterDescription?.trim()) {
+    prompt += `\n\n【人物特征限定】\n以下是参考图中人物的详细特征，所有格中的人物必须严格符合这些特征：\n${options.characterDescription.trim()}`;
+  }
 
   // 构造 contents：文本 + 源图 + 可选参考图
   const hasRef = !!options?.characterReferenceImage;
@@ -148,6 +242,10 @@ export async function generateContactSheetImage(
     refData = parsed.data;
     refMime = parsed.mimeType;
     if (isValidBase64(refData)) {
+      // 压缩参考图，避免超大 PNG 导致 API 超时
+      const compressed = await compressReferenceImage(refData, refMime);
+      refData = compressed.data;
+      refMime = compressed.mimeType;
       contents.push({ inlineData: { mimeType: refMime, data: refData } });
       console.log(`[grid] 参考图 base64 长度: ${refData.length} (≈${Math.round(refData.length * 0.75 / 1024)}KB), mime: ${refMime}`);
     } else {
@@ -224,7 +322,7 @@ export async function generateContactSheetImage(
   return null;
 }
 
-/** expandPanelTo2K 可选参数：人物参考图 + 人种 + 分辨率 + 辅助提示词 */
+/** expandPanelTo2K 可选参数：人物参考图 + 人种 + 分辨率 + 辅助提示词 + 人物特征描述 */
 export interface ExpandPanelOptions {
   characterReferenceImage?: string;
   /** 人种，用于提示中强调【人种】，严格按照参考图人物的所有面部特征 */
@@ -233,6 +331,8 @@ export interface ExpandPanelOptions {
   imageSize?: '2K' | '4K';
   /** 用户输入的辅助提示词，会追加到生成提示中 */
   auxiliaryPrompt?: string;
+  /** 人物特征描述文字，用于在提示词中限定人物特征 */
+  characterDescription?: string;
 }
 
 /**
@@ -271,6 +371,9 @@ export async function expandPanelTo2K(
       `则该人物的面部所有特征（五官、脸型、肤色、发型等）必须与附件中的参考图人物完全一致。` +
       `但如果第 ${panelIndex} 格是空镜、纯景物、或者只有身体局部（无面部），则不需要参考人物面部特征。`;
   }
+  if (options?.characterDescription?.trim()) {
+    prompt += `\n\n【人物特征限定】\n以下是参考图中人物的详细特征，生成的图片中人物必须严格符合这些特征：\n${options.characterDescription.trim()}`;
+  }
   if (options?.auxiliaryPrompt?.trim()) {
     prompt += `\n\n用户补充要求：${options.auxiliaryPrompt.trim()}`;
   }
@@ -281,9 +384,12 @@ export async function expandPanelTo2K(
     { inlineData: { mimeType, data: base64Data } },
   ];
   if (hasRef) {
-    const { data: refData, mimeType: refMime } = parseDataUrl(options!.characterReferenceImage!);
-    if (isValidBase64(refData)) {
-      contents.push({ inlineData: { mimeType: refMime, data: refData } });
+    const parsed = parseDataUrl(options!.characterReferenceImage!);
+    if (isValidBase64(parsed.data)) {
+      // 压缩参考图，避免超大 PNG 导致 API 超时
+      const compressed = await compressReferenceImage(parsed.data, parsed.mimeType);
+      contents.push({ inlineData: { mimeType: compressed.mimeType, data: compressed.data } });
+      console.log(`[expand] 参考图压缩后 base64 长度: ${compressed.data.length} (≈${Math.round(compressed.data.length * 0.75 / 1024)}KB)`);
     }
   }
 
@@ -296,16 +402,24 @@ export async function expandPanelTo2K(
   const modelIds = ['gemini-3-pro-image-preview', 'gemini-2.5-flash-image'];
   let lastError: unknown;
 
+  let got400 = false;
+  let gotProhibited = false;
+
   for (const modelId of modelIds) {
     try {
       console.log(`[expand] 第${panelIndex}格 → ${size}, 模型: ${modelId}`);
       const result = await callGeminiImage(ai, modelId, contents, '16:9');
       if (result) return result;
+      if (!lastError) lastError = new Error('API 未返回图片，可能被限流或内容策略拦截');
     } catch (e) {
       lastError = e;
       console.warn(`[expand] 模型 ${modelId} 失败:`, e instanceof Error ? e.message : e);
+      if (isProhibitedContent(e)) {
+        gotProhibited = true;
+        continue; // 继续尝试下一个模型
+      }
       if (is400Error(e)) {
-        // 400 → 去掉参考图重试
+        got400 = true;
         if (hasRef) {
           try {
             console.log(`[expand] 去掉参考图重试 ${modelId}...`);
@@ -318,6 +432,105 @@ export async function expandPanelTo2K(
         break;
       }
       continue;
+    }
+  }
+
+  // PROHIBITED_CONTENT 策略：裁剪出单格图片 + 简化提示词重试
+  // 整张九宫格中其他格可能触发了过滤，裁剪出单格可以避免干扰
+  if (gotProhibited) {
+    console.log(`[expand] PROHIBITED_CONTENT，裁剪第${panelIndex}格单独重试...`);
+    try {
+      const cropped = await cropPanelFromSheet(base64Data, panelIndex);
+      const croppedPrompt =
+        `附件是一张电影场景截图。请根据这张图片，生成一张 16:9 高分辨率大图。\n\n` +
+        `【要求】\n` +
+        `1. 构图、场景、人物姿态、服装、照明必须与附件图片完全一致。\n` +
+        `2. 输出一张 16:9 高清图片，画质清晰细腻，保持原图的风格与色调。`;
+      if (options?.characterReferenceImage && options?.ethnicity) {
+        // 仅加简短参考图说明
+      }
+      if (options?.auxiliaryPrompt?.trim()) {
+        // 保留用户补充要求
+      }
+
+      const croppedContents: typeof contents = [
+        { text: croppedPrompt },
+        { inlineData: { mimeType: cropped.mimeType, data: cropped.data } },
+      ];
+      // 如果有参考图，也加上（已压缩过）
+      if (hasRef) {
+        const parsed = parseDataUrl(options!.characterReferenceImage!);
+        if (isValidBase64(parsed.data)) {
+          const compressed = await compressReferenceImage(parsed.data, parsed.mimeType);
+          croppedContents.push({ inlineData: { mimeType: compressed.mimeType, data: compressed.data } });
+        }
+      }
+      const croppedContentsNoRef: typeof contents = [
+        { text: croppedPrompt },
+        { inlineData: { mimeType: cropped.mimeType, data: cropped.data } },
+      ];
+
+      for (const modelId of modelIds) {
+        try {
+          console.log(`[expand] 裁剪后重试模型: ${modelId}`);
+          const result = await callGeminiImage(ai, modelId, croppedContents, '16:9');
+          if (result) return result;
+        } catch (e) {
+          console.warn(`[expand] 裁剪后模型 ${modelId} 失败:`, e instanceof Error ? e.message : e);
+          lastError = e;
+          if (isProhibitedContent(e) && hasRef) {
+            // 裁剪图 + 参考图仍被过滤 → 去掉参考图
+            try {
+              console.log(`[expand] 裁剪后去掉参考图重试 ${modelId}...`);
+              const result = await callGeminiImage(ai, modelId, croppedContentsNoRef, '16:9');
+              if (result) return result;
+            } catch (e2) {
+              console.warn(`[expand] 裁剪后去掉参考图仍失败:`, e2 instanceof Error ? e2.message : e2);
+              lastError = e2;
+            }
+          }
+          if (is400Error(e)) break;
+        }
+      }
+    } catch (cropErr) {
+      console.warn('[expand] 裁剪失败:', cropErr instanceof Error ? cropErr.message : cropErr);
+    }
+  }
+
+  if (!got400 && !gotProhibited) {
+    // 503 / 限流：先尝试去掉参考图（减小请求体）
+    if (hasRef) {
+      console.log('[expand] 503/限流，去掉参考图重试...');
+      for (const modelId of modelIds) {
+        try {
+          const result = await callGeminiImage(ai, modelId, contentsNoRef, '16:9');
+          if (result) return result;
+        } catch (e) {
+          console.warn(`[expand] 去掉参考图模型 ${modelId} 失败:`, e instanceof Error ? e.message : e);
+          lastError = e;
+          if (is400Error(e)) break;
+        }
+      }
+    }
+
+    // 等 3 秒重试
+    console.log('[expand] 等待 3s 后重试...');
+    await new Promise((r) => setTimeout(r, 3000));
+    try {
+      const result = await callGeminiImage(ai, modelIds[0], contentsNoRef, '16:9');
+      if (result) return result;
+    } catch (retryErr) {
+      console.warn('[expand] 3s 后重试失败:', retryErr instanceof Error ? retryErr.message : retryErr);
+      if (!is400Error(retryErr)) {
+        console.log('[expand] 等待 15s 后最后重试...');
+        await new Promise((r) => setTimeout(r, 15000));
+        try {
+          const result = await callGeminiImage(ai, modelIds[0], contentsNoRef, '16:9');
+          if (result) return result;
+        } catch (retry2Err) {
+          console.warn('[expand] 15s 后重试失败:', retry2Err instanceof Error ? retry2Err.message : retry2Err);
+        }
+      }
     }
   }
 

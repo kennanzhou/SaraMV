@@ -69,6 +69,8 @@ export default function Module4Video() {
     addStep4GroupSource,
     unlockModule,
     studioSceneImage,
+    characterDescription,
+    setCharacterDescription,
   } = useAppStore(
     useShallow((s) => ({
       uploadedImage: s.uploadedImage,
@@ -85,6 +87,8 @@ export default function Module4Video() {
       addStep4GroupSource: s.addStep4GroupSource,
       unlockModule: s.unlockModule,
       studioSceneImage: s.studioSceneImage,
+      characterDescription: s.characterDescription,
+      setCharacterDescription: s.setCharacterDescription,
     }))
   );
 
@@ -104,6 +108,7 @@ export default function Module4Video() {
     for (let i = 1; i <= 9; i++) o[i] = { useRef: true, resolution: '2K', auxiliaryPrompt: '' };
     return o;
   });
+  const [charDescLoading, setCharDescLoading] = useState(false);
   /** 人物参考图：null 表示使用第一步上传的参考图（uploadedImage），非 null 表示用户上传的其它参考图 */
   const [characterRefImage, setCharacterRefImage] = useState<string | null>(null);
   const characterRefInputRef = useRef<HTMLInputElement>(null);
@@ -156,6 +161,7 @@ export default function Module4Video() {
           ethnicity: ethnicityOption,
           step3OutputBaseDir: step3OutputBaseDir ?? undefined,
           type: gridType,
+          characterDescription: characterDescription || undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -205,10 +211,11 @@ export default function Module4Video() {
           step3OutputBaseDir: step3OutputBaseDir ?? undefined,
           resolution: opts.resolution,
           auxiliaryPrompt: opts.auxiliaryPrompt || undefined,
+          characterDescription: characterDescription || undefined,
         }),
       });
-      if (!res.ok) throw new Error(`${opts.resolution} 生成失败`);
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(typeof data?.error === 'string' ? data.error : `第 ${panelIndex} 格 ${opts.resolution} 生成失败`);
       const url = data.imageUrl ?? null;
       if (url) {
         addStep4Panel2K(contactSheetSourceId, contactSheetImage, panelIndex, url);
@@ -218,7 +225,8 @@ export default function Module4Video() {
       }
     } catch (e) {
       console.error(e);
-      setErrorMessage(`第 ${panelIndex} 格 ${opts.resolution} 大图生成失败，请重试`);
+      const msg = e instanceof Error ? e.message : `第 ${panelIndex} 格 ${opts.resolution} 大图生成失败，请重试`;
+      setErrorMessage(msg.includes('503') || msg.includes('Deadline') ? `${msg}（API 超时，可稍后重试）` : msg);
     } finally {
       setExpandingPanel(null);
     }
@@ -364,6 +372,63 @@ export default function Module4Video() {
               </button>
             )}
           </div>
+
+          {/* 人物特征描述输入框 */}
+          {effectiveCharacterRefImage && (
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--background-tertiary)] p-3 flex-shrink-0">
+              <h3 className="text-xs font-medium text-[var(--foreground-muted)] mb-2">
+                人物特征描述
+              </h3>
+              <p className="text-[10px] text-[var(--foreground-muted)] mb-2">
+                用于生成图片时保持人物一致性，可手动修改
+              </p>
+              <textarea
+                value={characterDescription}
+                onChange={(e) => setCharacterDescription(e.target.value)}
+                placeholder="点击下方按钮自动分析参考图中的人物特征，或手动输入..."
+                className="input-field w-full text-xs resize-y min-h-[100px] mb-2"
+              />
+              <button
+                type="button"
+                disabled={charDescLoading}
+                className="btn-secondary w-full flex items-center justify-center gap-1.5 text-xs"
+                onClick={async () => {
+                  const img = effectiveCharacterRefImage;
+                  if (!img) return;
+                  setCharDescLoading(true);
+                  try {
+                    const res = await fetch('/api/analyze-character', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ image: img }),
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.characterDescription) {
+                      setCharacterDescription(data.characterDescription);
+                    } else {
+                      setErrorMessage(data.error || '人物特征分析失败');
+                    }
+                  } catch {
+                    setErrorMessage('人物特征分析失败，请重试');
+                  } finally {
+                    setCharDescLoading(false);
+                  }
+                }}
+              >
+                {charDescLoading ? (
+                  <>
+                    <RefreshCw size={12} className="animate-spin" />
+                    分析中...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw size={12} />
+                    {characterDescription ? '重新分析人物特征' : '自动分析人物特征'}
+                  </>
+                )}
+              </button>
+            </div>
+          )}
 
           {/* 第三步场景图 + 2K 图（均带九宫格 / 特写九宫格），及接触表列表 */}
           {step3Images.length === 0 && step4Groups.filter((g) => g.sourceId.startsWith('2k-')).length === 0 ? (
